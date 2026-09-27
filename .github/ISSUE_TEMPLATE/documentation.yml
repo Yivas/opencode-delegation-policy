@@ -1,0 +1,31 @@
+name: Documentation problem
+description: Report an incorrect statement or broken link in the scaffold.
+body:
+  - type: markdown
+    attributes:
+      value: "There is no installable software yet. Do not post credentials, private paths, prompts or logs. For sensitive findings, read [SECURITY.md](https://github.com/Yivas/opencode-delegation-policy/blob/main/SECURITY.md)."
+  - type: input
+    id: location
+    attributes:
+      label: File or URL and commit
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Current wording or observed problem
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected wording or result
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and removed sensitive data.
+          required: true

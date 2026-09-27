@@ -1,0 +1,32 @@
+name: Scoped proposal
+description: Discuss a user need before implementation begins.
+body:
+  - type: markdown
+    attributes:
+      value: "This scaffold has no supported runtime version. Proposals do not establish compatibility. Read [SECURITY.md](https://github.com/Yivas/opencode-delegation-policy/blob/main/SECURITY.md) before reporting sensitive details."
+  - type: textarea
+    id: need
+    attributes:
+      label: User need and expected behavior
+    validations:
+      required: true
+  - type: input
+    id: baseline
+    attributes:
+      label: OpenCode version or revision and operating system
+      description: State not tested if this is only a proposal.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Public API evidence, alternatives and limits
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing proposals, removed sensitive data and separated tested facts from assumptions.
+          required: true
