@@ -2,15 +2,42 @@
 
 Delegation policy for OpenCode v2, with explicit roles and model selection.
 
-**Project scaffold only.** There is no implementation, installable package, release, or verified
-OpenCode compatibility yet. The next step is to assess the target APIs before choosing a design.
+**Early implementation, not a usable plugin yet.** The typed entry and preference store have local
+unit tests. The entry does not yet apply policy, register agents or expose a terminal interface.
+There is no published package or verified OpenCode compatibility. Do not install this checkout in
+your personal OpenCode configuration.
+
+## Development
+
+The development baseline is Node.js `24.9.0`, npm `11.6.2` and the public types from
+`@opencode/plugin@2.0.21`. These types do not prove host compatibility.
+
+```bash
+npm ci --ignore-scripts
+npm run check
+```
+
+`check` runs formatting, lint, typechecking, build and Node's test runner. The tests use a storage
+double and make no provider calls or changes to OpenCode configuration. Run `npm run build` before
+`npm test` when running the tests separately. Use `--ignore-scripts` for dependency installation;
+the pinned SDK includes optional transitive packages with install scripts.
+
+The store keeps versioned global defaults and session overrides, with per-field provenance and
+separate Advisor mode. Applying a session change never saves defaults. `clearSession` returns to
+global defaults; `resetSession` turns delegation and Advisor off for that session. Malformed or
+future documents are not overwritten. Mutations are serialized within one store instance, not across server
+processes; a rejected write requires a fresh read because the host may have stored it.
+
+Real plugin loading, policy injection, models, agents, terminal UI, packaging and host integration
+remain unfinished. The manifest is private and has no release version.
 
 ## Participate
 
 This is a collaborative open-source project under the [MIT License](LICENSE).
 [Issues](https://github.com/Yivas/opencode-delegation-policy/issues) and pull requests are welcome for documentation corrections and scoped
-proposals. Discuss implementation work first; no runtime design has been approved.
+proposals. Discuss changes to the runtime contract first; local unit tests do not establish a
+supported OpenCode version.
 See [Contributing](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 Report sensitive findings through the process in [Security](SECURITY.md), not in a public issue.
-There are no supported software versions or installation instructions at this stage.
+There is no supported plugin release or plugin installation procedure at this stage.

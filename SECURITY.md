@@ -4,11 +4,17 @@
 
 | Line | Support |
 | --- | --- |
-| Repository scaffold | Documentation reports only; no executable software |
+| Development source | Reports on the typed entry and preference store; host integration unverified |
 | Software releases | None published or supported |
 
-This repository does not yet implement a plugin, install dependencies or provide runtime security
-controls. A proposed design is not a tested security boundary.
+The development entry has no host side effects. The preference store rejects malformed/future
+state and uses an injected storage interface; local tests do not verify OpenCode permissions,
+host persistence, agents or provider behavior. There is no supported plugin release.
+
+Use `npm ci --ignore-scripts` for development dependencies. Do not put credentials, prompts or
+personal configuration in the store or tests. Serialization protects callers of one store instance,
+not multiple server processes, and a rejected write has an unknown persistence outcome until
+re-read. The unit suite is not a tested runtime security boundary.
 
 ## Reporting
 
