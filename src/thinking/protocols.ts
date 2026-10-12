@@ -69,8 +69,6 @@ const OPENCODE_ZAI_MESSAGES =
 const OPENCODE_GEMINI = "opencode@8a8bd622 packages/ai/src/protocols/gemini.ts";
 const OPENCODE_OPENROUTER =
   "opencode@8a8bd622 packages/ai/src/providers/openrouter.ts";
-const OPENCODE_BEDROCK =
-  "opencode@8a8bd622 packages/ai/src/protocols/bedrock-converse.ts";
 
 const PI_ANTHROPIC_0_87_1 = "pi-ai@0.87.1 providers/data/anthropic.json";
 const PI_ANTHROPIC_1_1_0 = "pi-ai@1.1.0 providers/data/anthropic.json";
@@ -770,53 +768,6 @@ const geminiFamily: Family = (variant, model) => {
     : undefined;
 };
 
-// Bedrock: the family follows the model id, as the host builder does. Claude on Bedrock has no
-// proof here, so it stays unmapped.
-const bedrockFamily: Family = (variant, model) => {
-  const modelID = model.modelID ?? "";
-  const body = exactFields(bodyOf(variant), ["additionalModelRequestFields"]);
-  if (settingsOf(variant) !== undefined || body === undefined) {
-    return undefined;
-  }
-  const fields = exactFields(ownField(body, "additionalModelRequestFields"), [
-    "reasoning",
-    "reasoningConfig",
-    "reasoning_effort",
-  ]);
-  if (fields === undefined || modelID.includes("anthropic")) {
-    return undefined;
-  }
-  if (modelID.includes("openai.gpt-oss")) {
-    return proofOf(
-      "native",
-      OPENCODE_BEDROCK,
-      effortLevels(ownField(fields, "reasoning_effort"), GENERIC_EFFORTS),
-    );
-  }
-  if (modelID.includes("openai.") || modelID.includes("xai.")) {
-    const reasoning = exactFields(ownField(fields, "reasoning"), ["effort"]);
-    return reasoning === undefined
-      ? undefined
-      : proofOf(
-          "native",
-          OPENCODE_BEDROCK,
-          effortLevels(ownField(reasoning, "effort"), GENERIC_EFFORTS),
-        );
-  }
-  const config = exactFields(ownField(fields, "reasoningConfig"), [
-    "maxReasoningEffort",
-    "type",
-  ]);
-  if (config === undefined || ownField(config, "type") !== "enabled") {
-    return undefined;
-  }
-  return proofOf(
-    "native",
-    OPENCODE_BEDROCK,
-    effortLevels(ownField(config, "maxReasoningEffort"), GENERIC_EFFORTS),
-  );
-};
-
 // Cloudflare AI Gateway branches by the upstream model prefix, as the host builder does.
 const cloudflareFamily: Family = (variant, model) => {
   const modelID = model.modelID ?? "";
@@ -829,6 +780,9 @@ const cloudflareFamily: Family = (variant, model) => {
   return chatFamily(variant, model);
 };
 
+// Amazon Bedrock has no entry. The native Converse reader lowers providerOptions.thinking as an enabled budget.
+// It inspects http.body for block binding and the Nova 2 cap, not to prove a logical thinking level. Model-specific
+// effort fields require a separately evidenced translation; a JSON overlay alone is not that proof.
 const FAMILY_BY_PACKAGE: ReadonlyMap<string, Family> = new Map<string, Family>([
   ["@opencode/ai/providers/openai", responsesFamily],
   ["@opencode/ai/providers/xai", responsesFamily],
@@ -850,7 +804,6 @@ const FAMILY_BY_PACKAGE: ReadonlyMap<string, Family> = new Map<string, Family>([
   ["@opencode/ai/providers/openrouter", openrouterFamily],
   ["@opencode/ai/providers/google", geminiFamily],
   ["@opencode/ai/providers/google-vertex", geminiFamily],
-  ["@opencode/ai/providers/amazon-bedrock", bedrockFamily],
   ["@opencode/ai/providers/cloudflare-ai-gateway", cloudflareFamily],
 ]);
 

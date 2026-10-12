@@ -2061,3 +2061,82 @@ function withoutEvidence(value) {
     Object.entries(rest).map(([key, field]) => [key, withoutEvidence(field)]),
   );
 }
+
+// Bedrock validator cases. The catalogue entry's host id differs from its protocol modelID, so a
+// proof read from the protocol id or the alias would be a false positive. An unproven variant
+// must fail a fixed or range requirement closed, and stay opaque with its exact ModelRef when unset.
+const BEDROCK_PACKAGE = "@opencode/ai/providers/amazon-bedrock";
+
+function bedrockAliasCatalog() {
+  return catalogDouble([
+    catalogModel("acme", "bedrock-gpt-oss-host", {
+      modelID: "openai.gpt-oss-120b",
+      package: BEDROCK_PACKAGE,
+      variants: [
+        {
+          id: "bedrock-low",
+          body: { additionalModelRequestFields: { reasoning_effort: "low" } },
+        },
+      ],
+    }),
+  ]);
+}
+
+test("a fixed or range requirement fails closed on an unproven Bedrock variant, even if its body names a level", async () => {
+  const cases = [
+    { thinking: { kind: "fixed", level: "low" } },
+    { thinking: { kind: "range", from: "low", to: "high" } },
+  ];
+  for (const { thinking } of cases) {
+    const double = createStorageDouble();
+    const store = new PreferenceStore(double.storage);
+    await store.saveDefaults({
+      intensity: "normal",
+      advisorMode: "off",
+      roles: { small: configured("acme/bedrock-gpt-oss-host") },
+      thinking: { small: thinking },
+    });
+
+    const result = await validateDelegationAxes({
+      store,
+      catalog: bedrockAliasCatalog(),
+      sessionID: SESSION_ID,
+    });
+
+    assert.deepEqual(result.delegation, {
+      status: "error",
+      issues: [
+        { role: "small", field: "thinking", code: "thinking-unmapped" },
+        { field: "roles", code: "no-ordinary-role" },
+      ],
+    });
+  }
+});
+
+test("unset keeps an unproven Bedrock variant opaque with its exact ModelRef, including the variant", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: { small: configured("acme/bedrock-gpt-oss-host#bedrock-low") },
+  });
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog: bedrockAliasCatalog(),
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(result.delegation.roles, [
+    {
+      role: "small",
+      model: {
+        providerID: "acme",
+        id: "bedrock-gpt-oss-host",
+        variant: "bedrock-low",
+      },
+      thinking: { kind: "unset" },
+    },
+  ]);
+});

@@ -840,7 +840,7 @@ const MATRIX = [
     [],
   ],
 
-  // OpenRouter and Gemini and Bedrock: the same generic names; budgets and disables stay unmapped.
+  // OpenRouter and Gemini: the same generic names; budgets and disables stay unmapped.
   [
     "OpenRouter reasoning.effort high proves high under the generic rule",
     model(PACKAGE.openrouter, "x/y"),
@@ -955,25 +955,35 @@ const MATRIX = [
     }),
     [],
   ],
+  // Bedrock: the native protocol reads only providerOptions.thinking (a budget) and passes every other
+  // body key through unread. No body key is a level proof, so each row stays unmapped.
   [
-    "Bedrock gpt-oss reasoning_effort low proves low",
+    "Bedrock gpt-oss reasoning_effort low is unmapped (the native reader never reads it)",
     model(PACKAGE.bedrock, "openai.gpt-oss-120b"),
     variant({
       body: { additionalModelRequestFields: { reasoning_effort: "low" } },
     }),
-    ["low"],
+    [],
   ],
   [
-    "Bedrock openai reasoning effort high proves high",
-    model(PACKAGE.bedrock, "openai.gpt-5"),
+    "Bedrock GPT-5.5 reasoning.effort high is unmapped",
+    model(PACKAGE.bedrock, "openai.gpt-5.5"),
     variant({
       body: { additionalModelRequestFields: { reasoning: { effort: "high" } } },
     }),
-    ["high"],
+    [],
   ],
   [
-    "Bedrock reasoningConfig enabled medium proves medium",
-    model(PACKAGE.bedrock, "meta.llama4-maverick"),
+    "Bedrock Grok 4.6 reasoning.effort high is unmapped",
+    model(PACKAGE.bedrock, "xai.grok-4.6"),
+    variant({
+      body: { additionalModelRequestFields: { reasoning: { effort: "high" } } },
+    }),
+    [],
+  ],
+  [
+    "Bedrock Llama 4 Maverick reasoningConfig enabled medium is unmapped (non-reasoning in Pi)",
+    model(PACKAGE.bedrock, "meta.llama4-maverick-17b-instruct-v1:0"),
     variant({
       body: {
         additionalModelRequestFields: {
@@ -981,11 +991,11 @@ const MATRIX = [
         },
       },
     }),
-    ["medium"],
+    [],
   ],
   [
-    "Bedrock reasoningConfig disabled is not claimed off",
-    model(PACKAGE.bedrock, "meta.llama4-maverick"),
+    "Bedrock reasoningConfig disabled is unmapped, not off",
+    model(PACKAGE.bedrock, "meta.llama4-maverick-17b-instruct-v1:0"),
     variant({
       body: {
         additionalModelRequestFields: { reasoningConfig: { type: "disabled" } },
@@ -994,7 +1004,7 @@ const MATRIX = [
     [],
   ],
   [
-    "Bedrock Claude adaptive stays unmapped (no Pi Bedrock translation here)",
+    "Bedrock Claude adaptive with output_config effort is unmapped",
     model(PACKAGE.bedrock, "anthropic.claude-sonnet-4-6"),
     variant({
       body: {
@@ -1004,6 +1014,20 @@ const MATRIX = [
         },
       },
     }),
+    [],
+  ],
+  [
+    "Bedrock unknown custom id with reasoning_effort is unmapped",
+    model(PACKAGE.bedrock, "acme.custom-model"),
+    variant({
+      body: { additionalModelRequestFields: { reasoning_effort: "high" } },
+    }),
+    [],
+  ],
+  [
+    "Bedrock settings reasoningEffort high is unmapped (no Bedrock settings reader)",
+    model(PACKAGE.bedrock, "openai.gpt-oss-120b"),
+    variant({ settings: { reasoningEffort: "high" } }),
     [],
   ],
   [
@@ -1273,4 +1297,81 @@ test("Gemini native budget -1 and budget 0 on a dynamic id are conditional, so t
     ),
     [],
   );
+});
+
+// Bedrock source negatives. The pinned native reader (bedrock-converse.ts at 8a8bd622) reads only
+// providerOptions.thinking as an enabled budget. Other additionalModelRequestFields keys reach the wire only
+// through an http.body overlay, which the reader never inspects, so no key, level or model id establishes
+// an effort proof.
+const BEDROCK_UNREAD_BODIES = [
+  (level) => ({ additionalModelRequestFields: { reasoning_effort: level } }),
+  (level) => ({
+    additionalModelRequestFields: { reasoning: { effort: level } },
+  }),
+  (level) => ({
+    additionalModelRequestFields: {
+      reasoningConfig: { type: "enabled", maxReasoningEffort: level },
+    },
+  }),
+  (level) => ({
+    additionalModelRequestFields: {
+      thinking: { type: "adaptive" },
+      output_config: { effort: level },
+    },
+  }),
+  (level) => ({ additionalModelRequestFields: { effort: level } }),
+  () => ({
+    additionalModelRequestFields: {
+      thinking: { type: "enabled", budget_tokens: 8000 },
+    },
+  }),
+];
+const BEDROCK_LEVELS = [
+  "none",
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+const BEDROCK_IDS = [
+  "openai.gpt-oss-120b",
+  "openai.gpt-5.5",
+  "xai.grok-4.6",
+  "meta.llama4-maverick-17b-instruct-v1:0",
+  "anthropic.claude-sonnet-4-6",
+  "acme.custom-model",
+];
+
+test("no Bedrock body key yields a level proof for any level or model id", () => {
+  for (const modelID of BEDROCK_IDS) {
+    for (const body of BEDROCK_UNREAD_BODIES) {
+      for (const level of BEDROCK_LEVELS) {
+        const row = model(PACKAGE.bedrock, modelID);
+        const overlay = variant({ body: body(level) });
+        assert.equal(
+          knownThinkingProof(row, overlay),
+          undefined,
+          `${modelID} ${JSON.stringify(overlay.body)}`,
+        );
+        assert.deepEqual(knownThinkingLevels(row, overlay), []);
+      }
+    }
+  }
+});
+
+test("a bare Bedrock reasoningConfig enablement or an empty one proves no level", () => {
+  for (const reasoningConfig of [{ type: "enabled" }, {}]) {
+    assert.deepEqual(
+      knownThinkingLevels(
+        model(PACKAGE.bedrock, "openai.gpt-oss-120b"),
+        variant({
+          body: { additionalModelRequestFields: { reasoningConfig } },
+        }),
+      ),
+      [],
+    );
+  }
 });
