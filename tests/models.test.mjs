@@ -674,12 +674,28 @@ test("a fixed role with several proven variants returns them all for the launch 
   const expected = {
     kind: "options",
     options: [
-      { variant: "deep", level: "high" },
-      { variant: "arbitrary", level: "high" },
+      {
+        variant: "deep",
+        transportKind: "native",
+        compatibleLevels: ["high"],
+        admittedLevels: ["high"],
+      },
+      {
+        variant: "arbitrary",
+        transportKind: "native",
+        compatibleLevels: ["high"],
+        admittedLevels: ["high"],
+      },
     ],
   };
-  assert.deepEqual(first.delegation.roles[0].thinking, expected);
-  assert.deepEqual(second.delegation.roles[0].thinking, expected);
+  assert.deepEqual(
+    withoutEvidence(first.delegation.roles[0].thinking),
+    expected,
+  );
+  assert.deepEqual(
+    withoutEvidence(second.delegation.roles[0].thinking),
+    expected,
+  );
   assert.deepEqual(first.delegation.roles[0].model, {
     providerID: "acme",
     id: "small-model",
@@ -702,11 +718,17 @@ test("a fixed requirement with a matching inline variant keeps that variant", as
     sessionID: SESSION_ID,
   });
 
-  assert.deepEqual(result.delegation.roles, [
+  assert.deepEqual(withoutEvidence(result.delegation.roles), [
     {
       role: "small",
       model: { providerID: "acme", id: "small-model", variant: "deep" },
-      thinking: { kind: "inline", variant: "deep", level: "high" },
+      thinking: {
+        kind: "inline",
+        variant: "deep",
+        transportKind: "native",
+        compatibleLevels: ["high"],
+        admittedLevels: ["high"],
+      },
     },
   ]);
 });
@@ -786,16 +808,16 @@ test("a range accepts an inline variant on its endpoints and rejects one outside
     catalogModel("acme", "small-model", {
       variants: [
         effortVariant("low", "low"),
+        effortVariant("medium", "medium"),
         effortVariant("high", "high"),
-        effortVariant("max", "max"),
       ],
     }),
   ];
 
   for (const [reference, expected] of [
     ["acme/small-model#low", "ok"],
-    ["acme/small-model#high", "ok"],
-    ["acme/small-model#max", "thinking-variant-mismatch"],
+    ["acme/small-model#medium", "ok"],
+    ["acme/small-model#high", "thinking-variant-mismatch"],
   ]) {
     const double = createStorageDouble();
     const store = new PreferenceStore(double.storage);
@@ -803,7 +825,7 @@ test("a range accepts an inline variant on its endpoints and rejects one outside
       intensity: "normal",
       advisorMode: "off",
       roles: { small: configured(reference) },
-      thinking: { small: { kind: "range", from: "low", to: "high" } },
+      thinking: { small: { kind: "range", from: "low", to: "medium" } },
     });
 
     const result = await validateDelegationAxes({
@@ -1566,7 +1588,7 @@ for (const { name, data } of [
   });
 }
 
-test("a literal off effort stays unsupported under an arbitrary or off-named variant", async () => {
+test("a literal off effort stays unproven under an arbitrary or off-named variant, so the model is unmapped", async () => {
   const offVariants = [
     effortVariant("off", "off"),
     effortVariant("arbitrary", "off"),
@@ -1576,7 +1598,7 @@ test("a literal off effort stays unsupported under an arbitrary or off-named var
     {
       reference: "acme/small-model",
       thinking: { kind: "fixed", level: "off" },
-      code: "thinking-unsupported",
+      code: "thinking-unmapped",
     },
     {
       reference: "acme/small-model#arbitrary",
@@ -1639,9 +1661,16 @@ test("a range from off keeps only the proven levels inside it", async () => {
     sessionID: SESSION_ID,
   });
 
-  assert.deepEqual(result.delegation.roles[0].thinking, {
+  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
     kind: "options",
-    options: [{ variant: "low", level: "low" }],
+    options: [
+      {
+        variant: "low",
+        transportKind: "native",
+        compatibleLevels: ["low"],
+        admittedLevels: ["low"],
+      },
+    ],
   });
 });
 
@@ -1672,3 +1701,363 @@ test("settings inherited through a prototype do not prove the fixed level", asyn
     code: "thinking-variant-unproven",
   });
 });
+
+// Family matrix through the validator and the real PreferenceStore. Each row configures one
+// ordinary role with an arbitrary variant id; the expected outcome is the role-specific result.
+function familyCatalog(variants, modelID = "synthetic-model", overrides = {}) {
+  return [
+    catalogModel("acme", modelID, { package: OPENAI, ...overrides, variants }),
+  ];
+}
+
+// Anthropic catalogue entry for a verified adaptive model (Pi thinkingLevelMap: xhigh and max mapped).
+function anthropicCatalog(variants, id = "claude-opus-4-8") {
+  return [
+    catalogModel("anthropic", id, {
+      package: "@opencode/ai/providers/anthropic",
+      variants,
+    }),
+  ];
+}
+
+function anthropicEffortVariant(id, effort) {
+  return {
+    id,
+    settings: { thinking: { type: "adaptive", display: "summarized" }, effort },
+  };
+}
+
+async function validateSmallWithFixed(level, reference, catalog) {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: { small: configured(reference) },
+    thinking: { small: { kind: "fixed", level } },
+  });
+  return validateDelegationAxes({
+    store,
+    catalog: catalogDouble(catalog),
+    sessionID: SESSION_ID,
+  });
+}
+
+test("a fixed level proven by an arbitrary variant id is offered as an option, never chosen", async () => {
+  const result = await validateSmallWithFixed(
+    "high",
+    "anthropic/claude-opus-4-8",
+    anthropicCatalog([
+      anthropicEffortVariant("zeta", "low"),
+      anthropicEffortVariant("arbitrary-high", "high"),
+      anthropicEffortVariant("alpha", "high"),
+    ]),
+  );
+
+  assert.equal(result.delegation.status, "active");
+  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
+    kind: "options",
+    options: [
+      {
+        variant: "arbitrary-high",
+        transportKind: "native",
+        compatibleLevels: ["high"],
+        admittedLevels: ["high"],
+      },
+      {
+        variant: "alpha",
+        transportKind: "native",
+        compatibleLevels: ["high"],
+        admittedLevels: ["high"],
+      },
+    ],
+  });
+});
+
+test("an inline variant with a proven matching level is kept exactly as written", async () => {
+  const result = await validateSmallWithFixed(
+    "high",
+    "anthropic/claude-opus-4-8#custom-deep",
+    anthropicCatalog([anthropicEffortVariant("custom-deep", "high")]),
+  );
+
+  assert.deepEqual(result.delegation.roles[0].model, {
+    providerID: "anthropic",
+    id: "claude-opus-4-8",
+    variant: "custom-deep",
+  });
+  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
+    kind: "inline",
+    variant: "custom-deep",
+    transportKind: "native",
+    compatibleLevels: ["high"],
+    admittedLevels: ["high"],
+  });
+});
+
+test("an inline variant proven off conflicts with a fixed high and is reported, not replaced", async () => {
+  const result = await validateSmallWithFixed(
+    "high",
+    "acme/synthetic-model#custom-off",
+    familyCatalog(
+      [
+        { id: "custom-off", settings: { enableThinking: false } },
+        effortVariant("custom-high", "high"),
+      ],
+      "synthetic-model",
+      { package: "@opencode/ai/providers/alibaba/chat" },
+    ),
+  );
+
+  assert.deepEqual(result.delegation, {
+    status: "error",
+    issues: [
+      { role: "small", field: "thinking", code: "thinking-variant-mismatch" },
+      { field: "roles", code: "no-ordinary-role" },
+    ],
+  });
+});
+
+test("budget-only variants make a fixed level unmapped, distinct from unsupported", async () => {
+  const result = await validateSmallWithFixed(
+    "high",
+    "acme/synthetic-model",
+    familyCatalog(
+      [
+        { id: "high", settings: { reasoning: { max_tokens: 8000 } } },
+        { id: "max", settings: { reasoning: { max_tokens: 16000 } } },
+      ],
+      "synthetic-model",
+      { package: "@opencode/ai/providers/openrouter" },
+    ),
+  );
+
+  assert.deepEqual(result.delegation.issues[0], {
+    role: "small",
+    field: "thinking",
+    code: "thinking-unmapped",
+  });
+});
+
+test("a model whose only variant proves another level is unsupported for the requested one", async () => {
+  const result = await validateSmallWithFixed(
+    "max",
+    "anthropic/claude-opus-4-8",
+    anthropicCatalog([anthropicEffortVariant("low", "low")]),
+  );
+
+  assert.deepEqual(result.delegation.issues[0], {
+    role: "small",
+    field: "thinking",
+    code: "thinking-unsupported",
+  });
+});
+
+test("an Advisor fixed off with an explicit disable control is valid, and delegation is independent of it", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "on",
+    roles: {
+      small: configured("acme/small-model"),
+      advisor: configured("acme/synthetic-model#no-thinking"),
+    },
+    thinking: { advisor: { kind: "fixed", level: "off" } },
+  });
+  const catalog = catalogDouble([
+    catalogModel("acme", "small-model"),
+    catalogModel("acme", "synthetic-model", {
+      package: "@opencode/ai/providers/alibaba/chat",
+      variants: [{ id: "no-thinking", settings: { enableThinking: false } }],
+    }),
+  ]);
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  assert.equal(result.delegation.status, "active");
+  assert.deepEqual(withoutEvidence(result.advisor), {
+    status: "active",
+    advisor: {
+      role: "advisor",
+      model: {
+        providerID: "acme",
+        id: "synthetic-model",
+        variant: "no-thinking",
+      },
+      thinking: {
+        kind: "inline",
+        variant: "no-thinking",
+        transportKind: "binary",
+        compatibleLevels: ["off"],
+        admittedLevels: ["off"],
+      },
+    },
+  });
+});
+
+test("a catalogue entry whose modelID is not text fails the active axes as catalogue unavailable", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: { small: configured("acme/small-model") },
+  });
+  const catalog = rawCatalogDouble(
+    catalogEnvelope([catalogModel("acme", "small-model", { modelID: 9 })]),
+  );
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(result.delegation.issues[0], {
+    role: "small",
+    field: "catalog",
+    code: "catalog-unavailable",
+  });
+});
+
+// Many-to-one proofs through the validator. Pi sends the same effort for minimal and low on
+// adaptive Anthropic models, so one variant proves both and is reported as a set, never a choice.
+test("a range returns the whole many-to-one set a variant proves, without choosing one level", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: { small: configured("anthropic/claude-opus-4-8") },
+    thinking: { small: { kind: "range", from: "minimal", to: "low" } },
+  });
+  const ranged = await validateDelegationAxes({
+    store,
+    catalog: catalogDouble(
+      anthropicCatalog([anthropicEffortVariant("effort-low", "low")]),
+    ),
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(withoutEvidence(ranged.delegation.roles[0].thinking), {
+    kind: "options",
+    options: [
+      {
+        variant: "effort-low",
+        transportKind: "native",
+        compatibleLevels: ["minimal", "low"],
+        admittedLevels: ["minimal", "low"],
+      },
+    ],
+  });
+});
+
+test("a fixed minimal is admitted by the variant Pi also maps to low, reported as minimal only", async () => {
+  const result = await validateSmallWithFixed(
+    "minimal",
+    "anthropic/claude-opus-4-8",
+    anthropicCatalog([anthropicEffortVariant("effort-low", "low")]),
+  );
+
+  assert.equal(result.delegation.status, "active");
+  // The variant also proves low; the admitted set is only minimal, and the full proof is kept.
+  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
+    kind: "options",
+    options: [
+      {
+        variant: "effort-low",
+        transportKind: "native",
+        compatibleLevels: ["minimal", "low"],
+        admittedLevels: ["minimal"],
+      },
+    ],
+  });
+});
+
+test("a budget proof on a lowered limit admits every level its shared budget covers", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: { small: configured("anthropic/claude-sonnet-4-5#capped") },
+    thinking: { small: { kind: "fixed", level: "high" } },
+  });
+  const catalog = catalogDouble([
+    catalogModel("anthropic", "claude-sonnet-4-5", {
+      package: "@opencode/ai/providers/anthropic",
+      limit: { context: 200000, output: 2048 },
+      variants: [
+        {
+          id: "capped",
+          settings: { thinking: { type: "enabled", budgetTokens: 1024 } },
+        },
+      ],
+    }),
+  ]);
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
+    kind: "inline",
+    variant: "capped",
+    transportKind: "budget",
+    compatibleLevels: ["minimal", "low", "medium", "high"],
+    admittedLevels: ["high"],
+  });
+});
+
+test("a malformed output limit fails the catalogue for the active axes", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: { small: configured("acme/small-model") },
+  });
+  const catalog = rawCatalogDouble(
+    catalogEnvelope([
+      catalogModel("acme", "small-model", { limit: { context: 1, output: 0 } }),
+    ]),
+  );
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(result.delegation.issues[0], {
+    role: "small",
+    field: "catalog",
+    code: "catalog-unavailable",
+  });
+});
+
+// Evidence is asserted in protocols.test.mjs against its exact scope. Here a selection is compared on
+// transport and levels, so the same proof reads the same wherever the evidence string sits.
+function withoutEvidence(value) {
+  if (Array.isArray(value)) {
+    return value.map(withoutEvidence);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const { evidence, ...rest } = value;
+  if (evidence !== undefined) {
+    assert.equal(typeof evidence, "string");
+    assert.notEqual(evidence, "");
+  }
+  return Object.fromEntries(
+    Object.entries(rest).map(([key, field]) => [key, withoutEvidence(field)]),
+  );
+}

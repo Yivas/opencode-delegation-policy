@@ -2,13 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  knownThinkingLevel,
+  knownThinkingLevels,
   selectThinkingVariant,
   THINKING_LEVELS,
   thinkingRequirement,
 } from "../dist/thinking/policies.js";
 
 const OPENAI = "@opencode/ai/providers/openai";
+
+// Single-level adapter for the cases below. Multi-level proofs (many-to-one) are asserted in
+// protocols.test.mjs, so a set here reads as undefined, never as a chosen level.
+function knownThinkingLevel(model, variant) {
+  const levels = knownThinkingLevels(model, variant);
+  return levels.length === 1 ? levels[0] : undefined;
+}
 const XAI = "@opencode/ai/providers/xai";
 
 // Overlay shape emitted by the host's OpenAI Responses protocol for a named effort.
@@ -189,14 +196,22 @@ test("a fixed requirement accepts an inline variant with the same proven level",
   const deep = variant("deep", effortOverlay("high"));
 
   assert.deepEqual(
-    selectThinkingVariant(
-      model({ variants: [deep] }),
-      { from: "high", to: "high" },
-      deep,
+    withoutEvidence(
+      selectThinkingVariant(
+        model({ variants: [deep] }),
+        { from: "high", to: "high" },
+        deep,
+      ),
     ),
     {
       ok: true,
-      selection: { kind: "inline", variant: "deep", level: "high" },
+      selection: {
+        kind: "inline",
+        variant: "deep",
+        transportKind: "native",
+        compatibleLevels: ["high"],
+        admittedLevels: ["high"],
+      },
     },
   );
 });
@@ -237,14 +252,21 @@ test("a range accepts an inline variant only inside the inclusive bounds", () =>
       inside(level),
     );
     assert.deepEqual(
-      selected,
+      withoutEvidence(selected),
       {
         ok: true,
-        selection: { kind: "inline", variant: level, level },
+        selection: {
+          kind: "inline",
+          variant: level,
+          transportKind: "native",
+          compatibleLevels: [level],
+          admittedLevels: [level],
+        },
       },
       `inline ${level}`,
     );
   }
+  // minimal and xhigh are known OpenAI responses literals, so they are proven but outside low..high.
   for (const level of ["minimal", "xhigh"]) {
     assert.deepEqual(
       selectThinkingVariant(model({ variants }), range, inside(level)),
@@ -263,25 +285,37 @@ test("without an inline variant every proven option in range is returned, none c
   ];
 
   assert.deepEqual(
-    selectThinkingVariant(
-      model({ variants }),
-      { from: "low", to: "medium" },
-      undefined,
+    withoutEvidence(
+      selectThinkingVariant(
+        model({ variants }),
+        { from: "low", to: "medium" },
+        undefined,
+      ),
     ),
     {
       ok: true,
       selection: {
         kind: "options",
         options: [
-          { variant: "medium", level: "medium" },
-          { variant: "low", level: "low" },
+          {
+            variant: "medium",
+            transportKind: "native",
+            compatibleLevels: ["medium"],
+            admittedLevels: ["medium"],
+          },
+          {
+            variant: "low",
+            transportKind: "native",
+            compatibleLevels: ["low"],
+            admittedLevels: ["low"],
+          },
         ],
       },
     },
   );
 });
 
-test("a requirement with no proven variant in range is unsupported", () => {
+test("a requirement whose variants have unknown semantics is unmapped, not unsupported", () => {
   const budgetOnly = model({
     variants: [
       variant("high", { settings: { thinking: { budgetTokens: 8000 } } }),
@@ -290,7 +324,20 @@ test("a requirement with no proven variant in range is unsupported", () => {
 
   assert.deepEqual(
     selectThinkingVariant(budgetOnly, { from: "high", to: "high" }, undefined),
-    { ok: false, code: "thinking-unsupported" },
+    { ok: false, code: "thinking-unmapped" },
+  );
+  assert.deepEqual(
+    selectThinkingVariant(
+      model({
+        variants: [
+          variant("low", { settings: { reasoningEffort: "low" } }),
+          variant("deep", { settings: { thinking: { budgetTokens: 8000 } } }),
+        ],
+      }),
+      { from: "high", to: "high" },
+      undefined,
+    ),
+    { ok: false, code: "thinking-unmapped" },
   );
   assert.deepEqual(
     selectThinkingVariant(
@@ -361,3 +408,116 @@ test("an unset requirement keeps the selection unset and leaves an inline varian
     selection: { kind: "unset" },
   });
 });
+
+// Binary transport (Pi deepseek-format switch for kimi-k2.6). The proof is the full positive
+// set; admission depends on the requirement, and the wire stays one binary switch.
+const BINARY_MODEL = {
+  providerID: "moonshotai",
+  modelID: "kimi-k2.6",
+  package: "@opencode/ai/providers/moonshot/chat",
+  variants: [{ id: "switch", settings: { thinking: { type: "enabled" } } }],
+};
+const BINARY_POSITIVES = ["minimal", "low", "medium", "high"];
+
+function onlyOption(result) {
+  assert.equal(result.ok, true);
+  assert.equal(result.selection.kind, "options");
+  assert.equal(result.selection.options.length, 1);
+  return result.selection.options[0];
+}
+
+test("fixed low and fixed high share one binary proof and admit different levels", () => {
+  const low = onlyOption(
+    selectThinkingVariant(BINARY_MODEL, { from: "low", to: "low" }, undefined),
+  );
+  const high = onlyOption(
+    selectThinkingVariant(
+      BINARY_MODEL,
+      { from: "high", to: "high" },
+      undefined,
+    ),
+  );
+
+  assert.equal(low.transportKind, "binary");
+  assert.deepEqual(low.compatibleLevels, BINARY_POSITIVES);
+  assert.deepEqual(low.admittedLevels, ["low"]);
+  assert.deepEqual(high.compatibleLevels, BINARY_POSITIVES);
+  assert.deepEqual(high.admittedLevels, ["high"]);
+  assert.match(low.evidence, /kimi-k2\.6/);
+});
+
+test("an inline binary switch keeps its variant and the same transport semantics", () => {
+  const result = selectThinkingVariant(
+    BINARY_MODEL,
+    { from: "low", to: "low" },
+    BINARY_MODEL.variants[0],
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.selection.kind, "inline");
+  assert.equal(result.selection.variant, "switch");
+  assert.equal(result.selection.transportKind, "binary");
+  assert.deepEqual(result.selection.compatibleLevels, BINARY_POSITIVES);
+  assert.deepEqual(result.selection.admittedLevels, ["low"]);
+});
+
+test("a narrow range admits the non-empty intersection with the proof", () => {
+  const option = onlyOption(
+    selectThinkingVariant(
+      BINARY_MODEL,
+      { from: "minimal", to: "low" },
+      undefined,
+    ),
+  );
+
+  assert.deepEqual(option.admittedLevels, ["minimal", "low"]);
+  assert.deepEqual(option.compatibleLevels, BINARY_POSITIVES);
+});
+
+test("off and max are unsupported by a binary enabled switch, and fail as unsupported", () => {
+  assert.deepEqual(
+    selectThinkingVariant(BINARY_MODEL, { from: "off", to: "off" }, undefined),
+    { ok: false, code: "thinking-unsupported" },
+  );
+  assert.deepEqual(
+    selectThinkingVariant(BINARY_MODEL, { from: "max", to: "max" }, undefined),
+    { ok: false, code: "thinking-unsupported" },
+  );
+});
+
+test("a model id outside the exact table never inherits the binary proof", () => {
+  const renamed = { ...BINARY_MODEL, modelID: "kimi-k2.6-preview" };
+
+  assert.deepEqual(
+    selectThinkingVariant(renamed, { from: "low", to: "low" }, undefined),
+    { ok: false, code: "thinking-unmapped" },
+  );
+});
+
+test("an effort-capable model does not turn a bare switch into a binary proof", () => {
+  const capable = { ...BINARY_MODEL, modelID: "kimi-k3" };
+
+  assert.deepEqual(
+    selectThinkingVariant(capable, { from: "low", to: "low" }, undefined),
+    { ok: false, code: "thinking-unmapped" },
+  );
+});
+
+// Evidence is asserted in protocols.test.mjs against its exact scope. Here a selection is compared on
+// transport and levels, so the same proof reads the same wherever the evidence string sits.
+function withoutEvidence(value) {
+  if (Array.isArray(value)) {
+    return value.map(withoutEvidence);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const { evidence, ...rest } = value;
+  if (evidence !== undefined) {
+    assert.equal(typeof evidence, "string");
+    assert.notEqual(evidence, "");
+  }
+  return Object.fromEntries(
+    Object.entries(rest).map(([key, field]) => [key, withoutEvidence(field)]),
+  );
+}

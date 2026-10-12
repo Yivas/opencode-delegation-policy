@@ -9,13 +9,13 @@ import {
 } from "../state/schema.js";
 import type { PreferenceStore } from "../state/store.js";
 import {
-  isPlainRecord,
   selectThinkingVariant,
   type ThinkingIssueCode,
   type ThinkingSelection,
   type ThinkingVariant,
   thinkingRequirement,
 } from "../thinking/policies.js";
+import { isPlainRecord } from "../thinking/protocols.js";
 
 // The host's catalogue, read on each validation. Only `list` is used: its entries are
 // Model.Info records and `enabled` says whether the model may run.
@@ -82,8 +82,10 @@ export type DelegationValidation = {
 type CatalogModel = {
   readonly providerID: string;
   readonly id: string;
+  readonly modelID: string;
   readonly enabled: boolean;
   readonly package?: string;
+  readonly limit: { readonly output: number };
   readonly settings?: unknown;
   readonly headers?: unknown;
   readonly body?: unknown;
@@ -359,10 +361,22 @@ function isCatalogModel(value: unknown): value is CatalogModel {
   return (
     typeof value.providerID === "string" &&
     typeof value.id === "string" &&
+    typeof value.modelID === "string" &&
     typeof value.enabled === "boolean" &&
     (value.package === undefined || typeof value.package === "string") &&
+    isCatalogLimit(value.limit) &&
     Array.isArray(value.variants) &&
     [...value.variants].every(isCatalogVariant)
+  );
+}
+
+// The output limit bounds the Pi budget translation. Only a finite positive number is read.
+function isCatalogLimit(value: unknown): value is { output: number } {
+  return (
+    isPlainRecord(value) &&
+    typeof value.output === "number" &&
+    Number.isFinite(value.output) &&
+    value.output > 0
   );
 }
 

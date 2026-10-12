@@ -17,8 +17,8 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-`check` runs formatting, lint, typechecking, build and Node's test runner. The tests use a storage
-double and make no provider calls or changes to OpenCode configuration. Run `npm run build` before
+`check` runs formatting, lint, typechecking, build and Node's test runner. The tests use storage,
+catalogue and model-editor doubles, with no provider calls or changes to OpenCode configuration. Run `npm run build` before
 `npm test` when running the tests separately. Use `--ignore-scripts` for dependency installation;
 the pinned SDK includes optional transitive packages with install scripts.
 
@@ -32,10 +32,23 @@ The validator checks exact model references against an injected host catalogue a
 and Advisor errors separate. `with-delegation` without a configured Advisor stays off; unreadable
 preferences fail both axes without applying policy. Catalogue availability is not authentication.
 
-The initial thinking mapping recognizes `minimal` through `max` from OpenAI and xAI Responses effort
-overlays. Variant names are not level evidence; `none`/`off`, budgets and other protocols remain
-unmapped for fixed/range policies. An explicit variant is never replaced, and multiple compatible
-variants remain options for the caller—not an automatic launch choice.
+Thinking validation recognizes the six named OpenAI/xAI Responses efforts and scoped Anthropic,
+DeepSeek, Z.ai and Moonshot controls. Native-field recognition and model-specific Pi translations
+carry separate evidence. A binary switch or capped budget can cover several logical levels; the
+result keeps the full compatible set separate from the levels admitted by a fixed/range policy.
+Variant names are not evidence. An explicit variant is never replaced, and the validator never
+chooses a variant or a per-run level.
+
+A separate, unwired adapter can plan and register owned budget variants for verified nonadaptive
+Anthropic models. It preserves user variants, rejects any reserved-prefix collision and waits for
+an effective catalogue read when registration is batched. Unexpected editor failures escape to the
+host's failure boundary; in a grouped host this can disable the plugin's transform group. Expected
+per-model rejections remain skips.
+
+Full thinking parity remains unfinished, including Gemini budgets and model-specific levels,
+wrapper translations and scoped `off` controls. Budget recipes are checked at the model-derived
+cap, not against an actual request's output/context limit. Unit tests do not prove the effective
+provider payload, launch choice or provider behavior.
 
 Real plugin loading, policy injection, native agents/launches, terminal UI, packaging and host
 integration remain unfinished. The manifest is private and has no release version.

@@ -1,4 +1,5 @@
 import type { ThinkingSetting } from "../state/schema.js";
+import { recognizeVariantProof, type TransportKind } from "./protocols.js";
 
 // Canonical names, ordered from least to most reasoning. The host has no level field: a
 // variant's level exists only where a public protocol overlay spells it out.
@@ -13,11 +14,15 @@ export const THINKING_LEVELS = Object.freeze([
 ] as const);
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
+// "unmapped" means a variant's semantics are not proven here (a budget without a Pi translation,
+// an unproven switch, or a contradiction). "unsupported" means every proven variant excludes the
+// requirement, or there are none.
 export type ThinkingIssueCode =
   | "thinking-level-invalid"
   | "thinking-range-invalid"
   | "thinking-variant-unproven"
   | "thinking-variant-mismatch"
+  | "thinking-unmapped"
   | "thinking-unsupported";
 
 // Structural subset of the host's model metadata (Model.Info from @opencode/schema 2.0.21).
@@ -30,7 +35,10 @@ export type ThinkingVariant = {
 };
 
 export type ThinkingModel = {
+  readonly providerID: string;
+  readonly modelID?: string;
   readonly package?: string;
+  readonly limit?: { readonly output?: unknown };
   readonly settings?: unknown;
   readonly headers?: unknown;
   readonly body?: unknown;
@@ -47,62 +55,29 @@ export type ThinkingRequirementResult =
   | { readonly ok: true; readonly requirement: ThinkingRequirement | undefined }
   | { readonly ok: false; readonly code: ThinkingIssueCode };
 
-export type ThinkingOption = {
-  readonly variant: string;
-  readonly level: ThinkingLevel;
+// What one variant can mean, and what a requirement admits from it. `compatibleLevels` is the full
+// set the serialized request is compatible with (a binary switch can cover several levels); it is
+// never narrowed. `admittedLevels` is the non-empty intersection with the requirement. Neither is a
+// chosen level: the launch picks one from the admitted set, outside this module.
+export type ThinkingProof = {
+  readonly transportKind: TransportKind;
+  readonly compatibleLevels: readonly ThinkingLevel[];
+  readonly admittedLevels: readonly ThinkingLevel[];
+  readonly evidence: string;
 };
 
+export type ThinkingOption = { readonly variant: string } & ThinkingProof;
+
 // "inline" keeps the variant written in the model reference. "options" lists every proven
-// variant that satisfies the requirement; choosing one is the caller's launch decision.
+// variant whose compatible set meets the requirement; choosing one is the caller's launch decision.
 export type ThinkingSelection =
   | { readonly kind: "unset" }
-  | {
-      readonly kind: "inline";
-      readonly variant: string;
-      readonly level: ThinkingLevel;
-    }
+  | ({ readonly kind: "inline"; readonly variant: string } & ThinkingProof)
   | { readonly kind: "options"; readonly options: readonly ThinkingOption[] };
 
 export type ThinkingSelectionResult =
   | { readonly ok: true; readonly selection: ThinkingSelection }
   | { readonly ok: false; readonly code: ThinkingIssueCode };
-
-// Public protocol evidence for the host's variant ids, pinned to @opencode/schema 2.0.21
-// and the source commit 8a8bd622a3d7dc29ccf30ec17f84e363ed95ed72. In packages/core/src/variant.ts
-// (blob c07fcf13) the OpenAI Responses protocol and its xAI variant both emit
-// `settings: { reasoningEffort, reasoningSummary, include }` through `responsesEffort`.
-// Packages not listed here have no known level, even when their overlays look similar.
-const RESPONSES_EFFORT_SETTINGS: readonly string[] = Object.freeze([
-  "reasoningEffort",
-  "reasoningSummary",
-  "include",
-]);
-const REASONING_EFFORT_SETTINGS: ReadonlyMap<string, readonly string[]> =
-  new Map([
-    ["@opencode/ai/providers/openai", RESPONSES_EFFORT_SETTINGS],
-    ["@opencode/ai/providers/xai", RESPONSES_EFFORT_SETTINGS],
-  ]);
-
-const LEVEL_SETTING = "reasoningEffort";
-
-// Literal reasoningEffort values with a proven level. The protocol schema
-// (packages/ai/src/schema/options.ts, blob 88429a2d, at 8a8bd622) lists none and minimal..max as
-// known efforts. None has no canonical level here, and off is not listed, so a literal off proves
-// nothing. The schema also accepts any string, which proves no semantics either.
-const PROVEN_EFFORT_LEVELS: readonly ThinkingLevel[] = Object.freeze([
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
-
-// Model-level compaction is not a thinking control. Any other model-level overlay could hide
-// or override the variant's effort, so it makes every level unknown.
-const MODEL_SETTING_ALLOWLIST: readonly string[] = Object.freeze([
-  "compaction",
-]);
 
 export function thinkingRequirement(
   setting: ThinkingSetting,
@@ -133,41 +108,21 @@ export function thinkingRequirement(
   }
 }
 
-// Returns the level only when the variant's own overlay and the model-level overlays are
-// exactly the shape the allowlist names. Anything else is unknown, not a guess.
-export function knownThinkingLevel(
+// The proof a variant carries, or undefined when it is unmapped. Callers that need only the level
+// set read `compatibleLevels` from this.
+export function knownThinkingProof(
   model: ThinkingModel,
   variant: ThinkingVariant,
-): ThinkingLevel | undefined {
-  const allowedSettings =
-    model.package === undefined
-      ? undefined
-      : REASONING_EFFORT_SETTINGS.get(model.package);
-  if (allowedSettings === undefined) {
-    return undefined;
-  }
-  if (
-    !hasOnlyModelSettings(model) ||
-    variant.body !== undefined ||
-    variant.headers !== undefined
-  ) {
-    return undefined;
-  }
-  // Only own settings count: an inherited field is not part of the variant the host serves.
-  const settings = Object.hasOwn(variant, "settings")
-    ? variant.settings
-    : undefined;
-  if (
-    !isPlainRecord(settings) ||
-    !Object.keys(settings).every((key) => allowedSettings.includes(key)) ||
-    !Object.hasOwn(settings, LEVEL_SETTING)
-  ) {
-    return undefined;
-  }
-  const level = settings[LEVEL_SETTING];
-  return typeof level === "string" && isProvenEffortLevel(level)
-    ? level
-    : undefined;
+): Omit<ThinkingProof, "admittedLevels"> | undefined {
+  return recognizeVariantProof(model, variant);
+}
+
+// Every level the variant's proof is compatible with, in proof order. Empty means unmapped.
+export function knownThinkingLevels(
+  model: ThinkingModel,
+  variant: ThinkingVariant,
+): readonly ThinkingLevel[] {
+  return knownThinkingProof(model, variant)?.compatibleLevels ?? [];
 }
 
 // `inlineVariant` is the variant written in the model reference, already checked by the caller
@@ -182,39 +137,71 @@ export function selectThinkingVariant(
   }
 
   if (inlineVariant !== undefined) {
-    const level = knownThinkingLevel(model, inlineVariant);
-    if (level === undefined) {
+    const proof = knownThinkingProof(model, inlineVariant);
+    if (proof === undefined) {
       return { ok: false, code: "thinking-variant-unproven" };
     }
-    if (!satisfies(level, requirement)) {
+    const admittedLevels = admit(proof.compatibleLevels, requirement);
+    if (admittedLevels.length === 0) {
       return { ok: false, code: "thinking-variant-mismatch" };
     }
     return {
       ok: true,
-      selection: { kind: "inline", variant: inlineVariant.id, level },
+      selection: {
+        kind: "inline",
+        variant: inlineVariant.id,
+        ...withAdmitted(proof, admittedLevels),
+      },
     };
   }
 
   const options: ThinkingOption[] = [];
+  let unprovenVariant = false;
   for (const variant of model.variants) {
-    const level = knownThinkingLevel(model, variant);
-    if (level !== undefined && satisfies(level, requirement)) {
-      options.push({ variant: variant.id, level });
+    const proof = knownThinkingProof(model, variant);
+    if (proof === undefined) {
+      unprovenVariant = true;
+      continue;
+    }
+    const admittedLevels = admit(proof.compatibleLevels, requirement);
+    if (admittedLevels.length > 0) {
+      options.push({
+        variant: variant.id,
+        ...withAdmitted(proof, admittedLevels),
+      });
     }
   }
   if (options.length === 0) {
-    return { ok: false, code: "thinking-unsupported" };
+    return {
+      ok: false,
+      code: unprovenVariant ? "thinking-unmapped" : "thinking-unsupported",
+    };
   }
   return { ok: true, selection: { kind: "options", options } };
 }
 
-function satisfies(
-  level: ThinkingLevel,
+function withAdmitted(
+  proof: Omit<ThinkingProof, "admittedLevels">,
+  admittedLevels: readonly ThinkingLevel[],
+): ThinkingProof {
+  return {
+    transportKind: proof.transportKind,
+    compatibleLevels: proof.compatibleLevels,
+    admittedLevels,
+    evidence: proof.evidence,
+  };
+}
+
+// The levels of a compatible set that fall inside the inclusive requirement, in canonical order.
+function admit(
+  compatibleLevels: readonly ThinkingLevel[],
   requirement: ThinkingRequirement,
-): boolean {
-  const rank = levelRank(level);
-  return (
-    rank >= levelRank(requirement.from) && rank <= levelRank(requirement.to)
+): readonly ThinkingLevel[] {
+  return THINKING_LEVELS.filter(
+    (level) =>
+      compatibleLevels.includes(level) &&
+      levelRank(level) >= levelRank(requirement.from) &&
+      levelRank(level) <= levelRank(requirement.to),
   );
 }
 
@@ -224,35 +211,4 @@ function levelRank(level: ThinkingLevel): number {
 
 function isThinkingLevel(value: string): value is ThinkingLevel {
   return (THINKING_LEVELS as readonly string[]).includes(value);
-}
-
-function isProvenEffortLevel(value: string): value is ThinkingLevel {
-  return (PROVEN_EFFORT_LEVELS as readonly string[]).includes(value);
-}
-
-function hasOnlyModelSettings(model: ThinkingModel): boolean {
-  if (model.headers !== undefined || model.body !== undefined) {
-    return false;
-  }
-  if (model.settings === undefined) {
-    return true;
-  }
-  return (
-    isPlainRecord(model.settings) &&
-    Object.keys(model.settings).every((key) =>
-      MODEL_SETTING_ALLOWLIST.includes(key),
-    )
-  );
-}
-
-// Only plain and null-prototype objects are records. Arrays, class instances and prototype-linked
-// objects can carry fields that Object.keys does not list, so they are not treated as settings.
-export function isPlainRecord(
-  value: unknown,
-): value is Readonly<Record<string, unknown>> {
-  if (typeof value !== "object" || value === null) {
-    return false;
-  }
-  const prototype: unknown = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
 }
