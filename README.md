@@ -2,8 +2,8 @@
 
 Delegation policy for OpenCode v2, with explicit roles and model selection.
 
-**Early implementation, not a usable plugin yet.** The typed entry and preference store have local
-unit tests. The entry does not yet apply policy, register agents or expose a terminal interface.
+**Early implementation, not a usable plugin yet.** The typed entry, preference store and
+model/thinking validator have local unit tests. The entry does not yet apply policy, register agents or expose a terminal interface.
 There is no published package or verified OpenCode compatibility. Do not install this checkout in
 your personal OpenCode configuration.
 
@@ -28,8 +28,17 @@ global defaults; `resetSession` turns delegation and Advisor off for that sessio
 future documents are not overwritten. Mutations are serialized within one store instance, not across server
 processes; a rejected write requires a fresh read because the host may have stored it.
 
-Real plugin loading, policy injection, models, agents, terminal UI, packaging and host integration
-remain unfinished. The manifest is private and has no release version.
+The validator checks exact model references against an injected host catalogue and keeps delegation
+and Advisor errors separate. `with-delegation` without a configured Advisor stays off; unreadable
+preferences fail both axes without applying policy. Catalogue availability is not authentication.
+
+The initial thinking mapping recognizes `minimal` through `max` from OpenAI and xAI Responses effort
+overlays. Variant names are not level evidence; `none`/`off`, budgets and other protocols remain
+unmapped for fixed/range policies. An explicit variant is never replaced, and multiple compatible
+variants remain options for the caller—not an automatic launch choice.
+
+Real plugin loading, policy injection, native agents/launches, terminal UI, packaging and host
+integration remain unfinished. The manifest is private and has no release version.
 
 ## Participate
 
