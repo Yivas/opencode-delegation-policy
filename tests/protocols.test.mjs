@@ -870,9 +870,69 @@ const MATRIX = [
     ["high"],
   ],
   [
-    "Gemini thinkingLevel minimal is not claimed for the wrapper",
+    "Gemini lowercase minimal is native proof for any gemini model, not a Pi claim",
     model(PACKAGE.gemini, "gemini-3-pro"),
     variant({ settings: { thinkingConfig: { thinkingLevel: "minimal" } } }),
+    ["minimal"],
+  ],
+  [
+    "Gemini uppercase MINIMAL proves minimal on an exact Pi flash id",
+    model(PACKAGE.gemini, "gemini-3-flash-preview"),
+    variant({ settings: { thinkingConfig: { thinkingLevel: "MINIMAL" } } }),
+    ["minimal"],
+  ],
+  [
+    "Gemini uppercase LOW proves low on an exact Pi flash id",
+    model(PACKAGE.gemini, "gemini-3.5-flash"),
+    variant({
+      settings: {
+        thinkingConfig: { includeThoughts: true, thinkingLevel: "LOW" },
+      },
+    }),
+    ["low"],
+  ],
+  [
+    "Gemini uppercase MINIMAL is unmapped where Pi's map nulls minimal",
+    model(PACKAGE.gemini, "gemini-3.1-pro-preview"),
+    variant({ settings: { thinkingConfig: { thinkingLevel: "MINIMAL" } } }),
+    [],
+  ],
+  [
+    "Gemini uppercase MINIMAL on a Pi budget id is unmapped",
+    model(PACKAGE.gemini, "gemini-2.5-flash"),
+    variant({ settings: { thinkingConfig: { thinkingLevel: "MINIMAL" } } }),
+    [],
+  ],
+  [
+    "Gemini uppercase MINIMAL with explicit includeThoughts false is a conflict",
+    model(PACKAGE.gemini, "gemini-3-flash-preview"),
+    variant({
+      settings: {
+        thinkingConfig: { includeThoughts: false, thinkingLevel: "MINIMAL" },
+      },
+    }),
+    [],
+  ],
+  [
+    "Gemini uppercase MINIMAL with a budget beside it is a conflict",
+    model(PACKAGE.gemini, "gemini-3-flash-preview"),
+    variant({
+      settings: {
+        thinkingConfig: { thinkingBudget: 128, thinkingLevel: "MINIMAL" },
+      },
+    }),
+    [],
+  ],
+  [
+    "Gemini mixed-case wire is unmapped",
+    model(PACKAGE.gemini, "gemini-3-flash-preview"),
+    variant({ settings: { thinkingConfig: { thinkingLevel: "Minimal" } } }),
+    [],
+  ],
+  [
+    "Gemini uppercase level on a generic model id is unmapped, not native",
+    model(PACKAGE.gemini, "gemini-3-pro"),
+    variant({ settings: { thinkingConfig: { thinkingLevel: "HIGH" } } }),
     [],
   ],
   [
@@ -1182,4 +1242,35 @@ test("an openai or xai responses proof cites the OpenCode schema and never Pi", 
       "opencode@8a8bd622 packages/ai/src/protocols/utils/open-responses-options.ts",
     );
   }
+});
+
+// Native budget controls depend on the final request cap, so a dynamic -1 or a budget-0 disable is not a
+// ThinkingProof, however the id is registered.
+test("Gemini native budget -1 and budget 0 on a dynamic id are conditional, so they prove nothing", () => {
+  const dynamic = model(
+    PACKAGE.gemini,
+    "gemini-2.5-computer-use-preview-10-2025",
+  );
+  assert.deepEqual(
+    knownThinkingLevels(
+      dynamic,
+      variant({
+        settings: {
+          thinkingConfig: { includeThoughts: true, thinkingBudget: -1 },
+        },
+      }),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    knownThinkingLevels(
+      dynamic,
+      variant({
+        settings: {
+          thinkingConfig: { includeThoughts: false, thinkingBudget: 0 },
+        },
+      }),
+    ),
+    [],
+  );
 });

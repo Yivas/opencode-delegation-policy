@@ -1,3 +1,4 @@
+import { googleApiForPackage, planGoogleThinkingConfig } from "./google.js";
 import type { ThinkingLevel } from "./policies.js";
 
 // Recognizes what a variant proves. The variant id is never read: a proof comes from the overlay
@@ -718,11 +719,21 @@ const openrouterFamily: Family = (variant) => {
   );
 };
 
-// Gemini thinkingLevel: thoughts must be included (or unspecified); a budget is not a level.
-const geminiFamily: Family = (variant) => {
+// The native gemini reader knows four lowercase levels and sends them as given. Those are native proof only.
+const GEMINI_NATIVE_LEVELS: readonly ThinkingLevel[] = [
+  "minimal",
+  "low",
+  "medium",
+  "high",
+];
+
+// Gemini thinkingConfig. A budget is never proven here. A native uppercase level is a Pi proof only when the
+// exact model and API in google.ts serialize that level to the same SDK value; anything else is unmapped.
+const geminiFamily: Family = (variant, model) => {
   const settings = exactFields(settingsOf(variant), ["thinkingConfig"]);
   const config = exactFields(ownField(settings, "thinkingConfig"), [
     "includeThoughts",
+    "thinkingBudget",
     "thinkingLevel",
   ]);
   if (
@@ -732,15 +743,31 @@ const geminiFamily: Family = (variant) => {
   ) {
     return undefined;
   }
+  const level = ownField(config, "thinkingLevel");
   const includeThoughts = ownField(config, "includeThoughts");
+  const thinkingBudget = ownField(config, "thinkingBudget");
   if (includeThoughts !== undefined && includeThoughts !== true) {
     return undefined;
   }
-  return proofOf(
-    "native",
-    OPENCODE_GEMINI,
-    effortLevels(ownField(config, "thinkingLevel"), GENERIC_EFFORTS),
-  );
+  if (
+    typeof level === "string" &&
+    thinkingBudget === undefined &&
+    (GEMINI_NATIVE_LEVELS as readonly string[]).includes(level)
+  ) {
+    return proofOf("native", OPENCODE_GEMINI, [level as ThinkingLevel]);
+  }
+  const api = googleApiForPackage(model.package);
+  if (api === undefined || typeof level !== "string") {
+    return undefined;
+  }
+  const compatibility = planGoogleThinkingConfig(api, model.modelID ?? "", {
+    thinkingLevel: level,
+    thinkingBudget,
+    includeThoughts,
+  });
+  return compatibility.kind === "compatible-unconditional"
+    ? proofOf("native", compatibility.evidence, compatibility.compatibleLevels)
+    : undefined;
 };
 
 // Bedrock: the family follows the model id, as the host builder does. Claude on Bedrock has no

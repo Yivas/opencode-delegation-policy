@@ -33,7 +33,7 @@ and Advisor errors separate. `with-delegation` without a configured Advisor stay
 preferences fail both axes without applying policy. Catalogue availability is not authentication.
 
 Thinking validation recognizes the six named OpenAI/xAI Responses efforts and scoped Anthropic,
-DeepSeek, Z.ai and Moonshot controls. Native-field recognition and model-specific Pi translations
+DeepSeek, Z.ai, Moonshot and Google controls. Native-field recognition and model-specific Pi translations
 carry separate evidence. A binary switch or capped budget can cover several logical levels; the
 result keeps the full compatible set separate from the levels admitted by a fixed/range policy.
 Variant names are not evidence. An explicit variant is never replaced, and the validator never
@@ -45,10 +45,17 @@ an effective catalogue read when registration is batched. Unexpected editor fail
 host's failure boundary; in a grouped host this can disable the plugin's transform group. Expected
 per-model rejections remain skips.
 
-Full thinking parity remains unfinished, including Gemini budgets and model-specific levels,
-wrapper translations and scoped `off` controls. Budget recipes are checked at the model-derived
-cap, not against an actual request's output/context limit. Unit tests do not prove the effective
-provider payload, launch choice or provider behavior.
+Google planning uses exact model/API tables, including the different Gemini 2.5 Flash-Lite budgets
+in GenAI and Vertex. Scoped uppercase levels reproduce Pi's SDK enum values; lowercase levels carry
+native-field evidence only. The pure request verifier distinguishes unknown, known and proven-absent
+output caps, checks the native budget fit and filters ranges without selecting a level. All Google
+budgets, including automatic `-1`, remain conditional candidates outside role validation. Budget
+`off` also has an unresolved `includeThoughts` difference. These helpers are not wired to a launch gate.
+
+Full thinking parity remains unfinished, including Gemini budget execution, wrapper translations
+and scoped `off` controls. Anthropic budget recipes are checked at the model-derived cap, not against
+an actual request's output/context limit. Unit tests do not prove the effective provider payload,
+launch choice or provider behavior.
 
 Real plugin loading, policy injection, native agents/launches, terminal UI, packaging and host
 integration remain unfinished. The manifest is private and has no release version.
