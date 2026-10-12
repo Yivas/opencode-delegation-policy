@@ -60,6 +60,13 @@ or concurrent request changes. There is no production ownership authority or hoo
 It buffers owned bodies in memory, and later hooks can still rewrite its result. Local request doubles
 prove the component at its callback position, not the final wire or provider acceptance.
 
+Bedrock has a separate pure planner for the eleven exact Claude 4.6 catalogue entries in Pi AI
+`0.87.1`. It keeps compatible and admitted levels separate, models required field omissions and
+checks a candidate body overlay against supplied native fields. Its verdict covers thinking controls
+at the pre-auth overlay stage only; default-display and off-caller assumptions remain explicit.
+It does not certify AWS regions, execute a request or restore Bedrock capability proofs in role
+validation. Newer SDK semantics and manual budgets remain outside this initial scope.
+
 Full thinking parity remains unfinished, including Gemini budget execution, wrapper translations
 and scoped `off` controls. Anthropic budget recipes are checked at the model-derived cap, not against
 an actual request's output/context limit. Unit tests do not prove the effective provider payload,
