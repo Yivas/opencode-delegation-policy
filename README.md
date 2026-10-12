@@ -49,8 +49,16 @@ Google planning uses exact model/API tables, including the different Gemini 2.5 
 in GenAI and Vertex. Scoped uppercase levels reproduce Pi's SDK enum values; lowercase levels carry
 native-field evidence only. The pure request verifier distinguishes unknown, known and proven-absent
 output caps, checks the native budget fit and filters ranges without selecting a level. All Google
-budgets, including automatic `-1`, remain conditional candidates outside role validation. Budget
-`off` also has an unresolved `includeThoughts` difference. These helpers are not wired to a launch gate.
+budgets, including automatic `-1`, remain conditional candidates outside role validation. Native
+lowering of budget `off` also adds `includeThoughts`, which Pi omits. These helpers are not wired to a launch gate.
+
+An inert request component can replace only the Google thinking subtree after native lowering,
+restoring the scoped Pi budget or omitting inherited fields for `off` without changing the output cap.
+It requires an injected authority for the exact child, parent, role, model, variant, registration
+lifetime and body-independent authentication. It preserves request options and rejects stale bindings
+or concurrent request changes. There is no production ownership authority or hook registration yet.
+It buffers owned bodies in memory, and later hooks can still rewrite its result. Local request doubles
+prove the component at its callback position, not the final wire or provider acceptance.
 
 Full thinking parity remains unfinished, including Gemini budget execution, wrapper translations
 and scoped `off` controls. Anthropic budget recipes are checked at the model-derived cap, not against
