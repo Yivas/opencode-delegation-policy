@@ -108,12 +108,23 @@ forwarded native settings, arbitrary body overlays and later writers remain unre
 omission descriptors are not request settings or clearing overlays. There is no native-family
 registration, raw canonical planner, request consumer or role proof for these entries.
 
-Full thinking parity remains unfinished, including Azure/Codex Responses translations, other
+A source-only Codex Simple planner covers eight exact `openai-codex-responses` entries from that
+snapshot. Positive recipes include effort and automatic summary; supported off recipes use effort
+`none` with no summary. All retain encrypted-reasoning inclusion. Minimal and low share a complete
+compatible set; inclusive ranges return every admitted control class without selecting one.
+Advertised support rejects off for Astra and max for Spark/GPT-5.5 even where SDK clamping or raw
+inputs behave differently. Pi calculates a Simple output cap but never puts it in the Codex body;
+the planner records that builder-scoped omission before payload hooks, not a sent cap or an
+instruction to remove a native caller cap. It takes no cap or estimate input and has no arithmetic
+helper. Credential/account prerequisites, Simple preprocessing, body replacement, native
+correspondence, overlays, later writers and backend acceptance remain unresolved. No native
+family, raw planner, request consumer or role proof is registered.
+
+Full thinking parity remains unfinished, including Azure Responses translation, other
 model/wrapper branches, Gemini budget execution and scoped `off` controls. Pi-messages forwarding
 also leaves server-side translation unresolved. Anthropic budget recipes are checked at the
 model-derived cap, not against an actual request's output/context limit. Unit tests do not prove
-the effective provider payload,
-launch choice or provider behavior.
+the effective provider payload, launch choice or provider behavior.
 
 Real plugin loading, policy injection, native agents/launches, terminal UI, packaging and host
 integration remain unfinished. The manifest is private and has no release version.
