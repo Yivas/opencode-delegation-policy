@@ -2,8 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 
 import { THINKING_LEVELS, type ThinkingLevel } from "./policies.js";
 
-// Pure Bedrock planner for Claude 4.6 adaptive thinking on the Converse route. Nothing here registers a family,
-// promotes a ThinkingProof, reads an environment, a credential or AWS configuration, or calls a provider.
+// Pure Bedrock planner for Claude adaptive thinking on the Converse route, over the 47 catalogue rows verified in
+// Pi 0.87.1. Nothing here registers a family, promotes a ThinkingProof, reads an environment, a credential or AWS
+// configuration, or calls a provider.
 //
 // Provenance is one snapshot: Pi @earendil-works/pi-ai 0.87.1 (git f07218c4d4bbc12bef056a7058c3dd49dfe41abe), api
 // "bedrock-converse-stream". Files read as text: dist/providers/data/amazon-bedrock.json (key
@@ -11,19 +12,26 @@ import { THINKING_LEVELS, type ThinkingLevel } from "./policies.js";
 // mapThinkingLevelToEffort, supportsAdaptiveThinking, isGovCloudBedrockTarget, getConfiguredBedrockRegion) and
 // dist/models.js (getSupportedThinkingLevels). The 1.1.0 archive is not read, and no version is selected.
 //
-// Ids are exact catalogue keys. A prefix, alias, host id or chat: form is never normalised into a protocol id.
+// Ids are exact catalogue keys. A prefix, alias, host id, chat: form or name is never normalised into a protocol id.
 //
 // The gate proves a fact about the thinking subtree of additionalModelRequestFields at the overlay: the candidate
-// overlay merged over observed native fields, before SigV4 signs the final bytes. The merge mirrors mergeJsonRecords
+// overlay merged over caller-supplied fields, which are asserted to represent the native body after lowering and
+// before SigV4 signs the final bytes. An observed value without additionalModelRequestFields asserts their absence;
+// an unknown value asserts nothing and is never proven. A proven verdict establishes only that the thinking controls
+// match the canonical target under the supplied fields. Its retained conditions are not discharged, and neither the
+// actual observations, the reachability of the native default, the existence of a host override, nor the final wire
+// is established. The merge mirrors mergeJsonRecords
 // (OpenCode 8a8bd622, packages/ai/src/schema/options.ts, blob 88429a2d): recursive, skips undefined, cannot delete a
 // key, and leaves a nested record that merges to nothing absent. The native reader (packages/ai/src/protocols/
-// bedrock-converse.ts, blob 52a411e9) reads only providerOptions.thinking as an enabled budget. The native default
-// block_binding (packages/ai/src/protocols/utils/claude-model.ts, blob 244b3bd8) applies only with a compatibility
-// override or Claude 5.1 and later. No baseline id qualifies, and this module does not read compatibility, so the
-// observed native input must already carry any such field. The verdict is "at-overlay" only. The final wire, the
-// signature, the provider and later hooks are outside this module. Only thinking controls are compared; other
-// output_config fields are outside scope. A verdict does not certify AWS region validity, actual resolved configuration,
-// regional model availability or authentication: all region and native-field inputs are supplied by the caller.
+// bedrock-converse.ts, blob 52a411e9) reads only providerOptions.thinking as an enabled budget. For a row whose id the
+// native predicate covers (claude-model.ts, blob 244b3bd8, Claude 5.1 and later), the native route adds
+// thinking.block_binding and anthropic_beta even when no thinking option is passed, unless the host sets
+// compatibility.supportsThinkingBlockBinding to false. The overlay cannot delete those fields. This module never reads
+// that compatibility value, so a row marked nativeBindingDefault carries an open condition, and an observed default
+// block fails the gate. The verdict is "at-overlay" only. The final wire, the signature, the provider and later hooks
+// are outside this module. Only thinking controls are compared; other output_config fields are outside scope. A verdict
+// does not certify AWS region validity, actual resolved configuration, regional model availability, authentication, or
+// the host compatibility value: all region and native-field inputs are supplied by the caller.
 //
 // An own __proto__ key is rejected in every record. JSON.parse and defineProperty can create one, and a merge would
 // then set a prototype instead of a key, so a thinking field could be read from a place the wire never sends.
@@ -41,8 +49,9 @@ import { THINKING_LEVELS, type ThinkingLevel } from "./policies.js";
 export const BEDROCK_PACKAGE = "@opencode/ai/providers/amazon-bedrock";
 export const BEDROCK_API = "bedrock-converse-stream";
 
-// The eleven 0.87.1 catalogue rows that carry Claude 4.6 adaptive thinking. Each row has api bedrock-converse-stream,
-// reasoning true and thinkingLevelMap {"max":"max"}. The list is complete for this snapshot.
+// The eleven 0.87.1 Claude 4.6 rows, each with api bedrock-converse-stream, reasoning true and thinkingLevelMap
+// {"max":"max"}. This is the 4.6 subset only, kept for the baseline fixtures. It is not the full adaptive catalogue,
+// which is BEDROCK_ADAPTIVE_PROFILES.
 export const BEDROCK_BASELINE_IDS: readonly string[] = Object.freeze([
   "anthropic.claude-opus-4-6-v1",
   "anthropic.claude-sonnet-4-6",
@@ -56,9 +65,272 @@ export const BEDROCK_BASELINE_IDS: readonly string[] = Object.freeze([
   "us.anthropic.claude-opus-4-6-v1",
   "us.anthropic.claude-sonnet-4-6",
 ]);
-const BASELINE: ReadonlySet<string> = new Set(BEDROCK_BASELINE_IDS);
 
-export type BedrockEffort = "low" | "medium" | "high" | "max";
+// How a row's thinkingLevelMap admits logical levels. "max-only" is {"max":"max"}: no xhigh key, and off is supported
+// because the key is absent. "xhigh-max" adds the xhigh key. "off-null-xhigh-max" also sets off to null, so off is not
+// a supported level for that row.
+export type BedrockMapShape = "max-only" | "xhigh-max" | "off-null-xhigh-max";
+
+// One verified 0.87.1 catalogue row. nativeBindingDefault is a source fact about the id: the native route adds the
+// binding default for this id unless the host compatibility value is false (claude-model.ts, blob 244b3bd8). It is not
+// observed host state.
+export type BedrockAdaptiveProfile = {
+  readonly protocolModelID: string;
+  readonly thinkingLevelMap: BedrockMapShape;
+  readonly nativeBindingDefault: boolean;
+};
+
+const PROFILE_ROWS: readonly BedrockAdaptiveProfile[] = [
+  {
+    protocolModelID: "anthropic.claude-opus-4-6-v1",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "anthropic.claude-sonnet-4-6",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "au.anthropic.claude-opus-4-6-v1",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "au.anthropic.claude-sonnet-4-6",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "eu.anthropic.claude-opus-4-6-v1",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "eu.anthropic.claude-sonnet-4-6",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-opus-4-6-v1",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-sonnet-4-6",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "jp.anthropic.claude-sonnet-4-6",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-opus-4-6-v1",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-sonnet-4-6",
+    thinkingLevelMap: "max-only",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "anthropic.claude-opus-4-7",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "anthropic.claude-opus-4-8",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "anthropic.claude-sonnet-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "au.anthropic.claude-opus-4-7",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "au.anthropic.claude-opus-4-8",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "au.anthropic.claude-opus-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "au.anthropic.claude-sonnet-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "eu.anthropic.claude-opus-4-7",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "eu.anthropic.claude-opus-4-8",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "eu.anthropic.claude-opus-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "eu.anthropic.claude-sonnet-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-opus-4-7",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-opus-4-8",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-opus-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-sonnet-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "jp.anthropic.claude-opus-4-7",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "jp.anthropic.claude-opus-4-8",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "jp.anthropic.claude-opus-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "jp.anthropic.claude-sonnet-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-opus-4-7",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-opus-4-8",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-opus-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-sonnet-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "anthropic.claude-opus-5-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: true,
+  },
+  {
+    protocolModelID: "au.anthropic.claude-opus-5-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: true,
+  },
+  {
+    protocolModelID: "eu.anthropic.claude-opus-5-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: true,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-opus-5-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: true,
+  },
+  {
+    protocolModelID: "jp.anthropic.claude-opus-5-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: true,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-opus-5-5",
+    thinkingLevelMap: "xhigh-max",
+    nativeBindingDefault: true,
+  },
+  {
+    protocolModelID: "anthropic.claude-fable-5",
+    thinkingLevelMap: "off-null-xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "eu.anthropic.claude-fable-5",
+    thinkingLevelMap: "off-null-xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-fable-5",
+    thinkingLevelMap: "off-null-xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-fable-5",
+    thinkingLevelMap: "off-null-xhigh-max",
+    nativeBindingDefault: false,
+  },
+  {
+    protocolModelID: "anthropic.claude-fable-5-1",
+    thinkingLevelMap: "off-null-xhigh-max",
+    nativeBindingDefault: true,
+  },
+  {
+    protocolModelID: "global.anthropic.claude-fable-5-1",
+    thinkingLevelMap: "off-null-xhigh-max",
+    nativeBindingDefault: true,
+  },
+  {
+    protocolModelID: "us.anthropic.claude-fable-5-1",
+    thinkingLevelMap: "off-null-xhigh-max",
+    nativeBindingDefault: true,
+  },
+];
+
+// The 47 verified rows: 11 max-only (the baseline), 29 xhigh-max and 7 off-null. They are grouped by map shape, so the
+// order is not the catalogue file order; the membership and each row's values are what match the catalogue. Frozen, so
+// no caller can change a row.
+export const BEDROCK_ADAPTIVE_PROFILES: readonly BedrockAdaptiveProfile[] =
+  Object.freeze(PROFILE_ROWS.map((row) => Object.freeze({ ...row })));
+const PROFILE_BY_ID: ReadonlyMap<string, BedrockAdaptiveProfile> = new Map(
+  BEDROCK_ADAPTIVE_PROFILES.map((profile) => [
+    profile.protocolModelID,
+    profile,
+  ]),
+);
+
+export type BedrockEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type BedrockAbsence =
   | "thinking"
   | "output_config.effort"
@@ -67,7 +339,8 @@ export type BedrockAbsence =
   | "thinking.block_binding";
 export type BedrockCondition =
   | "caller-omits-reasoning-option"
-  | "default-thinking-display";
+  | "default-thinking-display"
+  | "native-block-binding-default-applies";
 export type BedrockInsufficient = "package" | "api" | "model";
 export type BedrockRegionClass = "standard" | "govcloud" | "not-applicable";
 
@@ -134,6 +407,8 @@ export type BedrockRangeCandidate = {
 };
 
 // Every control whose range membership is non-empty. Nothing is selected: a caller chooses from these candidates.
+// Range candidates are not gate inputs. Once a caller explicitly chooses a member, replan that level with
+// planBedrockLevel to obtain its verifiable provenance; this function makes no choice for the caller.
 export type BedrockRangePlan =
   | {
       readonly kind: "range";
@@ -189,8 +464,8 @@ type Place =
   | { readonly kind: "standard" }
   | { readonly kind: "govcloud" };
 
-// Canonical controls. Pi maps minimal and low both to effort low, so the low control carries both levels. off has
-// no effort at all. xhigh is not in any control, because 4.6's thinkingLevelMap has no xhigh key.
+// Canonical controls, in canonical order. Pi maps minimal and low both to effort low, so the low control carries both
+// levels. off has no effort at all. xhigh and off are present only for the rows whose map admits them (see controlsFor).
 type Control = {
   readonly effort: BedrockEffort | "off";
   readonly levels: readonly ThinkingLevel[];
@@ -203,26 +478,20 @@ const CONTROLS: readonly Control[] = Object.freeze([
   },
   { effort: "medium", levels: Object.freeze(["medium"] as ThinkingLevel[]) },
   { effort: "high", levels: Object.freeze(["high"] as ThinkingLevel[]) },
+  { effort: "xhigh", levels: Object.freeze(["xhigh"] as ThinkingLevel[]) },
   { effort: "max", levels: Object.freeze(["max"] as ThinkingLevel[]) },
 ]);
 
-const OFF_ABSENT: readonly BedrockAbsence[] = Object.freeze([
-  "thinking",
-  "output_config.effort",
-  "anthropic_beta",
-]);
 const ADAPTIVE_ABSENT: readonly BedrockAbsence[] = Object.freeze([
   "thinking.budget_tokens",
   "thinking.block_binding",
   "anthropic_beta",
 ]);
-const OFF_CONDITIONS: readonly BedrockCondition[] = Object.freeze([
-  "caller-omits-reasoning-option",
+const OFF_ABSENT: readonly BedrockAbsence[] = Object.freeze([
+  "thinking",
+  "output_config.effort",
+  "anthropic_beta",
 ]);
-const DEFAULT_DISPLAY_CONDITIONS: readonly BedrockCondition[] = Object.freeze([
-  "default-thinking-display",
-]);
-const NO_CONDITIONS: readonly BedrockCondition[] = Object.freeze([]);
 
 const MAX_JSON_DEPTH = 32;
 const PROTO_KEY = "__proto__";
@@ -233,6 +502,11 @@ const NON_PLANNED_KINDS: readonly string[] = Object.freeze([
   "insufficient",
   "invalid-input",
 ]);
+const MAP_TEXT: Readonly<Record<BedrockMapShape, string>> = Object.freeze({
+  "max-only": '{"max":"max"}',
+  "xhigh-max": '{"xhigh":"xhigh","max":"max"}',
+  "off-null-xhigh-max": '{"off":null,"xhigh":"xhigh","max":"max"}',
+});
 
 export function planBedrockLevel(
   candidate: unknown,
@@ -250,11 +524,11 @@ export function planBedrockLevel(
   if (place === undefined) {
     return { kind: "invalid-input", code: "region" };
   }
-  const insufficient = insufficiencyOf(read);
-  if (insufficient !== undefined) {
-    return { kind: "insufficient", reason: insufficient };
+  const found = profileOf(read);
+  if (!("profile" in found)) {
+    return { kind: "insufficient", reason: found.insufficient };
   }
-  const control = controlFor(level);
+  const control = controlFor(found.profile, level);
   if (control === undefined) {
     return { kind: "unsupported-level", level };
   }
@@ -263,15 +537,14 @@ export function planBedrockLevel(
     return {
       kind: "pending-region",
       level,
-      evidence: evidenceFor(read.protocolModelID, control.effort),
+      evidence: evidenceFor(found.profile, control.effort),
     };
   }
-  return plannedLevel(read, level, control, regionClass);
+  return plannedLevel(read, found.profile, level, control, regionClass);
 }
 
-// The admitted members of an inclusive range, per control. A range with no admitted level is "none", not success.
-// Range candidates are not gate inputs. Once a caller explicitly chooses a member, replan that level with
-// planBedrockLevel to obtain its verifiable provenance; this function makes no choice for the caller.
+// The admitted members of an inclusive range, per control, for the row's own controls. A range with no admitted level is
+// "none", not success.
 export function planBedrockRange(
   candidate: unknown,
   range: unknown,
@@ -293,16 +566,16 @@ export function planBedrockRange(
   if (place === undefined) {
     return { kind: "invalid-input", code: "region" };
   }
-  const insufficient = insufficiencyOf(read);
-  if (insufficient !== undefined) {
-    return { kind: "insufficient", reason: insufficient };
+  const found = profileOf(read);
+  if (!("profile" in found)) {
+    return { kind: "insufficient", reason: found.insufficient };
   }
   const low = THINKING_LEVELS.indexOf(from);
   const high = THINKING_LEVELS.indexOf(to);
   if (low > high) {
     return { kind: "invalid-input", code: "range" };
   }
-  const admitted = CONTROLS.flatMap((control) => {
+  const admitted = controlsFor(found.profile).flatMap((control) => {
     const levels = control.levels.filter((member) => {
       const rank = THINKING_LEVELS.indexOf(member);
       return rank >= low && rank <= high;
@@ -323,8 +596,8 @@ export function planBedrockRange(
         compatibleLevels: control.levels,
         admittedLevels: Object.freeze([...levels]),
         target: targetFor(control.effort, regionClass === "govcloud"),
-        conditions: conditionsFor(control.effort, regionClass),
-        evidence: evidenceFor(read.protocolModelID, control.effort),
+        conditions: conditionsFor(control.effort, regionClass, found.profile),
+        evidence: evidenceFor(found.profile, control.effort),
       }),
     );
   }
@@ -332,8 +605,9 @@ export function planBedrockRange(
 }
 
 // Checks one plan against an observed native thinking field and the candidate overlay. The plan is trusted only when
-// it equals the canonical plan rebuilt from its own candidate, level and region class. A native field that is unknown
-// makes the result conditional. An overlay cannot remove a native key, so a conflict in the merged result is unproven.
+// it equals the canonical plan rebuilt from its own candidate, level and region class, for that row. A native field that
+// is unknown makes the result conditional. An overlay cannot remove a native key, so a conflict in the merged result is
+// unproven.
 export function verifyBedrockOverlay(
   plan: unknown,
   native: BedrockNativeThinking,
@@ -383,6 +657,7 @@ export function verifyBedrockOverlay(
 
 function plannedLevel(
   candidate: BedrockCandidate,
+  profile: BedrockAdaptiveProfile,
   level: ThinkingLevel,
   control: Control,
   regionClass: BedrockRegionClass,
@@ -398,33 +673,37 @@ function plannedLevel(
     regionClass,
     compatibleLevels: control.levels,
     target: targetFor(control.effort, regionClass === "govcloud"),
-    conditions: conditionsFor(control.effort, regionClass),
-    evidence: evidenceFor(candidate.protocolModelID, control.effort),
+    conditions: conditionsFor(control.effort, regionClass, profile),
+    evidence: evidenceFor(profile, control.effort),
   });
 }
 
-// The canonical plan a record must equal: its own candidate, level and region class, rebuilt from the controls.
-// Off takes not-applicable, and every positive control takes standard or govcloud. Anything else is not a plan.
+// The canonical plan a record must equal: its own candidate, level and region class, rebuilt from that row's controls.
+// Off takes not-applicable, and every positive control takes standard or govcloud. A level the row does not support, such
+// as off on a group C or D row, is not a plan.
 function canonicalPlanFor(plan: JsonRecord): BedrockPlannedLevel | undefined {
   const candidate = readCandidate(ownDataValue(plan, "candidate"));
   const level = ownDataValue(plan, "level");
   const regionClass = ownDataValue(plan, "regionClass");
   if (
     candidate === undefined ||
-    insufficiencyOf(candidate) !== undefined ||
     !isThinkingLevel(level) ||
     !isRegionClass(regionClass)
   ) {
     return undefined;
   }
-  const control = controlFor(level);
+  const found = profileOf(candidate);
+  if (!("profile" in found)) {
+    return undefined;
+  }
+  const control = controlFor(found.profile, level);
   if (
     control === undefined ||
     (control.effort === "off") !== (regionClass === "not-applicable")
   ) {
     return undefined;
   }
-  return plannedLevel(candidate, level, control, regionClass);
+  return plannedLevel(candidate, found.profile, level, control, regionClass);
 }
 
 // Pi sends display summarized in a standard region and omits it in GovCloud. Off sends no thinking fields at all.
@@ -449,18 +728,24 @@ function targetFor(
   });
 }
 
-// A standard adaptive target depends on the SDK default display. Off depends on a caller omitting the option. A
-// GovCloud target has no display option to depend on.
+// Off depends on a caller omitting the option. A standard adaptive target depends on the SDK default display. A GovCloud
+// target has no display option to depend on. A row whose native default applies carries that obstacle as a condition,
+// whatever the effort, because the native route adds the binding fields before any overlay is merged.
 function conditionsFor(
   effort: BedrockEffort | "off",
   regionClass: BedrockRegionClass,
+  profile: BedrockAdaptiveProfile,
 ): readonly BedrockCondition[] {
+  const conditions: BedrockCondition[] = [];
   if (effort === "off") {
-    return OFF_CONDITIONS;
+    conditions.push("caller-omits-reasoning-option");
+  } else if (regionClass === "standard") {
+    conditions.push("default-thinking-display");
   }
-  return regionClass === "standard"
-    ? DEFAULT_DISPLAY_CONDITIONS
-    : NO_CONDITIONS;
+  if (profile.nativeBindingDefault) {
+    conditions.push("native-block-binding-default-applies");
+  }
+  return Object.freeze(conditions);
 }
 
 // Off does not read the region. A positive control needs a known region, so an unknown region returns undefined and
@@ -478,18 +763,35 @@ function regionClassFor(
   return place.kind === "govcloud" ? "govcloud" : "standard";
 }
 
+// The controls a row supports: off only where its map does not set off to null, and xhigh only where its map has an
+// xhigh key. Max and the positive levels below xhigh are always present.
+function controlsFor(profile: BedrockAdaptiveProfile): readonly Control[] {
+  return CONTROLS.filter((control) => {
+    if (control.effort === "off") {
+      return profile.thinkingLevelMap !== "off-null-xhigh-max";
+    }
+    if (control.effort === "xhigh") {
+      return profile.thinkingLevelMap !== "max-only";
+    }
+    return true;
+  });
+}
+
+function controlFor(
+  profile: BedrockAdaptiveProfile,
+  level: ThinkingLevel,
+): Control | undefined {
+  return controlsFor(profile).find((control) => control.levels.includes(level));
+}
+
 function evidenceFor(
-  protocolModelID: string,
+  profile: BedrockAdaptiveProfile,
   effort: BedrockEffort | "off",
 ): string {
   if (effort === "off") {
     return "pi-ai@0.87.1 dist/api/bedrock-converse-stream.js buildAdditionalModelRequestFields returns no fields when options.reasoning is falsy; the caller mapping of off is outside the archive";
   }
-  return `pi-ai@0.87.1 dist/providers/data/amazon-bedrock.json "bedrock-converse-stream"["${protocolModelID}"] (reasoning true, thinkingLevelMap {"max":"max"}); dist/api/bedrock-converse-stream.js buildAdditionalModelRequestFields adaptive branch and mapThinkingLevelToEffort`;
-}
-
-function controlFor(level: ThinkingLevel): Control | undefined {
-  return CONTROLS.find((control) => control.levels.includes(level));
+  return `pi-ai@0.87.1 dist/providers/data/amazon-bedrock.json "bedrock-converse-stream"["${profile.protocolModelID}"] (reasoning true, thinkingLevelMap ${MAP_TEXT[profile.thinkingLevelMap]}); dist/api/bedrock-converse-stream.js buildAdditionalModelRequestFields adaptive branch and mapThinkingLevelToEffort`;
 }
 
 function readCandidate(value: unknown): BedrockCandidate | undefined {
@@ -509,24 +811,25 @@ function readCandidate(value: unknown): BedrockCandidate | undefined {
   return { packageName, api, protocolModelID };
 }
 
-function insufficiencyOf(
+// The row for an exact id, after the package and API are checked. Anything else is insufficient, with its reason.
+function profileOf(
   candidate: BedrockCandidate,
-): BedrockInsufficient | undefined {
+):
+  | { readonly profile: BedrockAdaptiveProfile }
+  | { readonly insufficient: BedrockInsufficient } {
   if (candidate.packageName !== BEDROCK_PACKAGE) {
-    return "package";
+    return { insufficient: "package" };
   }
   if (candidate.api !== BEDROCK_API) {
-    return "api";
+    return { insufficient: "api" };
   }
-  if (!BASELINE.has(candidate.protocolModelID)) {
-    return "model";
-  }
-  return undefined;
+  const profile = PROFILE_BY_ID.get(candidate.protocolModelID);
+  return profile === undefined ? { insufficient: "model" } : { profile };
 }
 
 // The SDK literal: the lowercased name starts with "us-gov-". The name is neither trimmed nor validated, so a leading
 // space is not GovCloud, and "us-gov" is not GovCloud either. The SDK also tests the model id against "us-gov." and
-// "arn:aws-us-gov:", but no baseline id matches either prefix.
+// "arn:aws-us-gov:", but no catalogue id in this module matches either prefix.
 function readRegion(value: unknown): Place | undefined {
   if (!isRecord(value)) {
     return undefined;

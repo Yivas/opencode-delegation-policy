@@ -60,12 +60,15 @@ or concurrent request changes. There is no production ownership authority or hoo
 It buffers owned bodies in memory, and later hooks can still rewrite its result. Local request doubles
 prove the component at its callback position, not the final wire or provider acceptance.
 
-Bedrock has a separate pure planner for the eleven exact Claude 4.6 catalogue entries in Pi AI
-`0.87.1`. It keeps compatible and admitted levels separate, models required field omissions and
-checks a candidate body overlay against supplied native fields. Its verdict covers thinking controls
-at the pre-auth overlay stage only; default-display and off-caller assumptions remain explicit.
-It does not certify AWS regions, execute a request or restore Bedrock capability proofs in role
-validation. Newer SDK semantics remain outside this initial scope.
+Bedrock has a separate pure planner for all 47 exact adaptive Claude catalogue entries in Pi AI
+`0.87.1`. It resolves `xhigh` and `off` support per row, keeps compatible and admitted levels separate,
+and checks an overlay against caller-supplied fields asserted to represent the lowered native body.
+Seven rows reject logical `off`; nine carry a native-default binding obstacle that the overlay
+cannot delete. A control match proves only the supplied-field comparison at the pre-auth overlay
+stage. Retained display, caller and binding conditions are not discharged: no actual observation,
+host override or default reachability is certified. The planner does not execute requests, certify
+AWS regions or restore Bedrock capability proofs in role validation. Newer SDK semantics remain
+outside this scope.
 
 A second pure planner covers the 22 exact nonadaptive Claude entries in the same snapshot. It
 calculates manual budgets from supplied context estimates and Pi caller caps, with every arithmetic
