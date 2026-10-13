@@ -120,8 +120,18 @@ helper. Credential/account prerequisites, Simple preprocessing, body replacement
 correspondence, overlays, later writers and backend acceptance remain unresolved. No native
 family, raw planner, request consumer or role proof is registered.
 
-Full thinking parity remains unfinished, including Azure Responses translation, other
-model/wrapper branches, Gemini budget execution and scoped `off` controls. Pi-messages forwarding
+A source-only Azure Simple planner covers all 29 exact reasoning entries in that snapshot.
+Admitted positive levels keep their individual effort, automatic summary and encrypted-reasoning
+include; the nine admitted off entries use effort `none` without summary or include. Inclusive ranges
+return all supported classes without selection. The Simple cap and the builder target are separate:
+the builder raises a positive cap below 16 to 16 before sampling-parameter overlays and payload
+hooks. Supplied caps are not clipped to the catalogue maximum, and unknown caps/estimates stay
+unresolved. Positive finite supplied caps are a local input precondition; source zero-cap omission
+is not modelled. Azure client/deployment resolution, overlays, native correspondence and backend
+acceptance remain unresolved; no family registration, request consumer or role proof is added.
+
+Full thinking parity remains unfinished, including other model/wrapper branches, Gemini budget
+execution and scoped `off` controls. Pi-messages forwarding
 also leaves server-side translation unresolved. Anthropic budget recipes are checked at the
 model-derived cap, not against an actual request's output/context limit. Unit tests do not prove
 the effective provider payload, launch choice or provider behavior.
