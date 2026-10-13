@@ -79,6 +79,14 @@ are immutable. These are source calculations and target descriptions, not verifi
 context/cap producers, client resolution, authentication, serialization and a request consumer remain
 unfinished. Synthetic arithmetic inputs carry no catalogue evidence.
 
+An unwired Bedrock reader observes `inferenceConfig.maxTokens` from a native clone of a supplied
+`Request`, leaving the original readable. It distinguishes a finite numeric cap, known absence,
+malformed fields and unavailable evidence without exposing the body or headers. Its scope is that
+request snapshot, not the cap finally sent. The caller must establish the protocol and ownership;
+public events expose no request ID for authoritative cross-stage correlation. It buffers the whole
+JSON body and has no timeout or cancellation policy, so an open stream can leave it pending.
+These resource limits must be addressed before integration; no callback is registered.
+
 Full thinking parity remains unfinished, including Gemini budget execution, wrapper translations
 and scoped `off` controls. Anthropic budget recipes are checked at the model-derived cap, not against
 an actual request's output/context limit. Unit tests do not prove the effective provider payload,
