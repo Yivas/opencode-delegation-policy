@@ -29,7 +29,11 @@ import { THINKING_LEVELS, type ThinkingLevel } from "./policies.js";
 // then set a prototype instead of a key, so a thinking field could be read from a place the wire never sends.
 //
 // Standard regions send display summarized by default (bedrock-converse-stream.js, options.thinkingDisplay ?? "summarized").
-// The target carries that default as a condition, because a caller may set thinkingDisplay. GovCloud omits display.
+// The target carries that default as a condition. On the raw stream route a caller may set thinkingDisplay, so the condition
+// is needed there. On the streamSimple route the condition is conservative: buildBaseOptions does not forward the caller's
+// thinkingDisplay, region, interleavedThinking, profile or bearerToken, so display is the source default there. It does
+// forward apiKey, which the client may use as a bearer token. This comment makes no claim about how AWS resolves that
+// value. GovCloud omits display.
 //
 // The request cap is not calculated. Pi's budget path, its context estimator and the caller's output limit are separate
 // inputs, and this module never raises or rewrites a cap.

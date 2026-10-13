@@ -65,7 +65,16 @@ Bedrock has a separate pure planner for the eleven exact Claude 4.6 catalogue en
 checks a candidate body overlay against supplied native fields. Its verdict covers thinking controls
 at the pre-auth overlay stage only; default-display and off-caller assumptions remain explicit.
 It does not certify AWS regions, execute a request or restore Bedrock capability proofs in role
-validation. Newer SDK semantics and manual budgets remain outside this initial scope.
+validation. Newer SDK semantics remain outside this initial scope.
+
+A second pure planner covers the 22 exact nonadaptive Claude entries in the same snapshot. It
+calculates manual budgets from supplied context estimates and Pi caller caps, with every arithmetic
+stage visible. It compares Pi's virtual output cap with a separately supplied native cap; either a
+higher or lower Pi cap blocks cap-preserving parity without changing the native value. Fixed/range
+results keep complete recipe-equivalent sets and select nothing. The reference rows and level list
+are immutable. These are source calculations and target descriptions, not verified provider requests:
+context/cap producers, client resolution, authentication, serialization and a request consumer remain
+unfinished. Synthetic arithmetic inputs carry no catalogue evidence.
 
 Full thinking parity remains unfinished, including Gemini budget execution, wrapper translations
 and scoped `off` controls. Anthropic budget recipes are checked at the model-derived cap, not against
