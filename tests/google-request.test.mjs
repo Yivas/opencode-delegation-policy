@@ -23,6 +23,9 @@ const PRO_MODEL = {
   id: "gemini-2.5-pro",
   variant: "owned-high",
 };
+// Test-only read limits, passed explicitly to every hook. They are not a production default.
+const TEST_READ_POLICY = Object.freeze({ maxBytes: 1 << 20, timeoutMs: 5000 });
+
 const BINDING = {
   registrationToken: "token-1",
   epoch: 3,
@@ -108,7 +111,10 @@ function ownershipOf(results, state = { current: true }) {
 const owned = (binding) => ({ kind: "owned", binding });
 const UNOWNED = { kind: "unowned" };
 const hookFor = (binding, state) =>
-  createGoogleOwnedRequestHook(ownershipOf(owned(binding), state));
+  createGoogleOwnedRequestHook(
+    ownershipOf(owned(binding), state),
+    TEST_READ_POLICY,
+  );
 
 // Host-shaped dispatch: hooks run and await in order. A throw stops the trigger before the request handler.
 async function trigger(event, hooks, handler) {
@@ -260,7 +266,10 @@ test("an unowned request keeps its identity and its body is never read, even whe
   const request = requestFor("{");
   const clones = countClones(request);
   const event = eventFor(request);
-  await createGoogleOwnedRequestHook(ownershipOf(UNOWNED))(event);
+  await createGoogleOwnedRequestHook(
+    ownershipOf(UNOWNED),
+    TEST_READ_POLICY,
+  )(event);
 
   assert.equal(event.request, request);
   assert.equal(clones.calls, 0);
@@ -274,7 +283,10 @@ test("a native inline override outside an owned selection is not rewritten", asy
   const event = eventFor(request, {
     model: { ...PRO_MODEL, variant: "user-inline" },
   });
-  await createGoogleOwnedRequestHook(ownershipOf(UNOWNED))(event);
+  await createGoogleOwnedRequestHook(
+    ownershipOf(UNOWNED),
+    TEST_READ_POLICY,
+  )(event);
 
   assert.equal(event.request, request);
   assert.deepEqual(await bodyOf(request), native);
@@ -547,7 +559,7 @@ test("a later peer that resets the budget after the callback leaves a mismatch a
 test("a disposal while the body read is pending blocks the assignment, and a fresh retry succeeds", async () => {
   const state = { current: true };
   const ownership = ownershipOf(owned(BINDING), state);
-  const hook = createGoogleOwnedRequestHook(ownership);
+  const hook = createGoogleOwnedRequestHook(ownership, TEST_READ_POLICY);
   const native = JSON.stringify(packet({ maxOutputTokens: 40000 }));
 
   let cloneCalls = 0;
@@ -566,10 +578,13 @@ test("a disposal while the body read is pending blocks the assignment, and a fre
     clone: () => {
       cloneCalls += 1;
       return {
-        text: async () => {
-          await gate;
-          return native;
-        },
+        body: new ReadableStream({
+          pull: async (controller) => {
+            await gate;
+            controller.enqueue(new TextEncoder().encode(native));
+            controller.close();
+          },
+        }),
       };
     },
   };
@@ -598,9 +613,10 @@ test("a binding whose token changes while the body is read is a mismatch, and no
   const drifted = { ...BINDING, registrationToken: "token-2" };
   const event = eventFor(requestFor(packet({})));
   await rejectsWith(
-    createGoogleOwnedRequestHook(ownershipOf([owned(BINDING), owned(drifted)]))(
-      event,
-    ),
+    createGoogleOwnedRequestHook(
+      ownershipOf([owned(BINDING), owned(drifted)]),
+      TEST_READ_POLICY,
+    )(event),
     "binding-mismatch",
   );
   assert.deepEqual(await bodyOf(event.request), packet({}));
@@ -608,7 +624,7 @@ test("a binding whose token changes while the body is read is a mismatch, and no
 
 test("creating the hook registers nothing and classifies nothing", () => {
   const ownership = ownershipOf(owned(BINDING));
-  createGoogleOwnedRequestHook(ownership);
+  createGoogleOwnedRequestHook(ownership, TEST_READ_POLICY);
   assert.equal(ownership.counters.classify, 0);
 });
 
@@ -646,11 +662,23 @@ function mutateDuringRead(request, mutate) {
   Object.defineProperty(request, "clone", {
     value: () => {
       const copy = Request.prototype.clone.call(request);
+      const source = copy.body.getReader();
+      let mutated = false;
       return {
-        text: async () => {
-          mutate();
-          return copy.text();
-        },
+        body: new ReadableStream({
+          pull: async (controller) => {
+            if (!mutated) {
+              mutated = true;
+              mutate();
+            }
+            const { done, value } = await source.read();
+            if (done) {
+              controller.close();
+            } else {
+              controller.enqueue(value);
+            }
+          },
+        }),
       };
     },
   });
@@ -693,7 +721,7 @@ test("a port that mutates its binding object in place between classifications is
     shared.level = "low";
   });
   await rejectsWith(
-    createGoogleOwnedRequestHook(port)(event),
+    createGoogleOwnedRequestHook(port, TEST_READ_POLICY)(event),
     "binding-mismatch",
   );
   assert.equal(event.request, request);
@@ -722,7 +750,10 @@ test("in-place changes of token, epoch, model and level during the read are each
     const request = requestFor(packet({}));
     const event = eventFor(request);
     await rejectsWith(
-      createGoogleOwnedRequestHook(sharedBindingOwnership(change))(event),
+      createGoogleOwnedRequestHook(
+        sharedBindingOwnership(change),
+        TEST_READ_POLICY,
+      )(event),
       "binding-mismatch",
     );
     assert.equal(event.request, request);
@@ -736,6 +767,7 @@ test("after an in-place mismatch, a fresh stable binding writes its own control"
       sharedBindingOwnership((s) => {
         s.level = "low";
       }),
+      TEST_READ_POLICY,
     )(mismatch),
     "binding-mismatch",
   );
@@ -793,7 +825,7 @@ test("a classify that throws or rejects with a raw secret fails with an opaque o
     const clones = countClones(request);
     const event = eventFor(request);
     await assertOpaqueOwnershipFailure(
-      createGoogleOwnedRequestHook(port)(event),
+      createGoogleOwnedRequestHook(port, TEST_READ_POLICY)(event),
     );
     assert.equal(clones.calls, 0);
     assert.equal(event.request, request);
@@ -814,7 +846,9 @@ test("a second classify that throws or rejects is opaque and blocks the assignme
   };
   const request = requestFor(packet({ maxOutputTokens: 40000 }));
   const event = eventFor(request);
-  await assertOpaqueOwnershipFailure(createGoogleOwnedRequestHook(port)(event));
+  await assertOpaqueOwnershipFailure(
+    createGoogleOwnedRequestHook(port, TEST_READ_POLICY)(event),
+  );
   assert.equal(event.request, request);
 });
 
@@ -834,7 +868,7 @@ test("an isCurrent that throws is opaque on the first and on the second check, a
     const request = requestFor(packet({ maxOutputTokens: 40000 }));
     const event = eventFor(request);
     await assertOpaqueOwnershipFailure(
-      createGoogleOwnedRequestHook(port)(event),
+      createGoogleOwnedRequestHook(port, TEST_READ_POLICY)(event),
     );
     assert.equal(event.request, request);
   }
@@ -853,7 +887,7 @@ test("a malformed classification is an ownership failure, never a pass-through o
     const clones = countClones(request);
     const event = eventFor(request);
     await rejectsWith(
-      createGoogleOwnedRequestHook(ownershipOf(value))(event),
+      createGoogleOwnedRequestHook(ownershipOf(value), TEST_READ_POLICY)(event),
       "ownership-failed",
     );
     assert.equal(clones.calls, 0);
@@ -869,7 +903,10 @@ test("a malformed classification is an ownership failure, never a pass-through o
   const request = requestFor(packet({}));
   const event = eventFor(request);
   await assertOpaqueOwnershipFailure(
-    createGoogleOwnedRequestHook(ownershipOf(throwingBinding))(event),
+    createGoogleOwnedRequestHook(
+      ownershipOf(throwingBinding),
+      TEST_READ_POLICY,
+    )(event),
   );
   assert.equal(event.request, request);
 });
@@ -890,8 +927,10 @@ test("a request replaced while the port is consulted is rejected, and the old bo
   };
   const handled = [];
   await rejectsWith(
-    trigger(event, [createGoogleOwnedRequestHook(port)], (r) =>
-      handled.push(r),
+    trigger(
+      event,
+      [createGoogleOwnedRequestHook(port, TEST_READ_POLICY)],
+      (r) => handled.push(r),
     ),
     "request-changed",
   );
@@ -944,7 +983,7 @@ test("a header changed on the original during the second classify is rejected at
     isCurrent: () => true,
   };
   await rejectsWith(
-    createGoogleOwnedRequestHook(port)(event),
+    createGoogleOwnedRequestHook(port, TEST_READ_POLICY)(event),
     "request-changed",
   );
   assert.equal(event.request, request);
@@ -982,7 +1021,7 @@ test("a port that retains the isCurrent snapshot and changes its level is an own
     retained.level = "low";
   });
   await rejectsWith(
-    createGoogleOwnedRequestHook(port)(event),
+    createGoogleOwnedRequestHook(port, TEST_READ_POLICY)(event),
     "ownership-failed",
   );
   assert.equal(event.request, request);
@@ -996,7 +1035,7 @@ test("a port that retains the isCurrent snapshot and changes its nested model is
     retained.model.id = "gemini-2.5-flash";
   });
   await rejectsWith(
-    createGoogleOwnedRequestHook(port)(event),
+    createGoogleOwnedRequestHook(port, TEST_READ_POLICY)(event),
     "ownership-failed",
   );
   assert.equal(event.request, request);
@@ -1015,8 +1054,856 @@ test("a port that returns a fresh record with a different level is a binding mis
     isCurrent: () => true,
   };
   await rejectsWith(
-    createGoogleOwnedRequestHook(port)(event),
+    createGoogleOwnedRequestHook(port, TEST_READ_POLICY)(event),
     "binding-mismatch",
   );
   assert.equal(event.request, request);
+});
+
+// ----- Read policy and the bounded cloned-body reader -----
+
+const JSON_BODY = JSON.stringify(packet({ maxOutputTokens: 40000 }));
+const encoder = new TextEncoder();
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// A lazy stream: pull runs only when the hook reads, not at construction, so an abort inside pull lands mid-read.
+const lazyStream = (source) => new ReadableStream(source, { highWaterMark: 0 });
+
+// A fake original with a chosen body stream, for failures a real Request cannot stage. The clone hands out the stream.
+function streamingRequest(body, signal = new AbortController().signal) {
+  return {
+    method: "POST",
+    url: URL_BASE,
+    headers: new Headers({
+      "content-type": "application/json",
+      "x-goog-api-key": KEY,
+    }),
+    signal,
+    clone: () => ({ body }),
+  };
+}
+
+// A real Request whose body is a stream, so its clone is teed like a native request.
+function streamRequest(stream, signal) {
+  return new Request(URL_BASE, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": KEY },
+    body: stream,
+    duplex: "half",
+    signal,
+  });
+}
+
+function policyHook(policy, port = ownershipOf(owned(BINDING))) {
+  return createGoogleOwnedRequestHook(port, policy);
+}
+
+test("a valid read policy is copied at creation, so a later change to the caller's object has no effect", async () => {
+  const policy = { maxBytes: 100000, timeoutMs: 5000 };
+  const hook = policyHook(policy);
+  assert.equal(Object.isFrozen(policy), false);
+  policy.maxBytes = 1;
+  policy.timeoutMs = 1;
+
+  const event = eventFor(requestFor(packet({ maxOutputTokens: 40000 })));
+  await hook(event);
+  assert.deepEqual(
+    (await bodyOf(event.request)).generationConfig.thinkingConfig,
+    PRO_HIGH,
+  );
+});
+
+test("a missing, malformed, inherited, accessor or revoked read policy is refused at creation, and no getter runs", () => {
+  let reads = 0;
+  const accessor = {};
+  Object.defineProperty(accessor, "maxBytes", {
+    enumerable: true,
+    get() {
+      reads += 1;
+      return 10;
+    },
+  });
+  accessor.timeoutMs = 10;
+  const inherited = Object.create({ maxBytes: 10, timeoutMs: 10 });
+  const revoked = Proxy.revocable({ maxBytes: 10, timeoutMs: 10 }, {});
+  revoked.revoke();
+  const trapping = new Proxy(
+    { maxBytes: 10, timeoutMs: 10 },
+    {
+      getOwnPropertyDescriptor() {
+        throw new Error(SYNTHETIC);
+      },
+    },
+  );
+  const malformed = [
+    undefined,
+    null,
+    [],
+    Object.assign([], { maxBytes: 10, timeoutMs: 10 }),
+    "policy",
+    {},
+    { maxBytes: 10 },
+    { timeoutMs: 10 },
+    { maxBytes: 0, timeoutMs: 10 },
+    { maxBytes: -1, timeoutMs: 10 },
+    { maxBytes: 1.5, timeoutMs: 10 },
+    { maxBytes: Number.NaN, timeoutMs: 10 },
+    { maxBytes: Number.POSITIVE_INFINITY, timeoutMs: 10 },
+    { maxBytes: 2 ** 53, timeoutMs: 10 },
+    { maxBytes: "10", timeoutMs: 10 },
+    { maxBytes: 10, timeoutMs: 0 },
+    { maxBytes: 10, timeoutMs: 2147483648 },
+    { maxBytes: 10, timeoutMs: Number.NaN },
+    { maxBytes: 10, timeoutMs: Number.POSITIVE_INFINITY },
+    inherited,
+    accessor,
+    revoked.proxy,
+    trapping,
+  ];
+  for (const policy of malformed) {
+    assert.throws(
+      () => policyHook(policy),
+      (error) => {
+        assert.ok(error instanceof GoogleOwnedRequestError, String(error));
+        assert.equal(error.code, "policy-invalid");
+        assert.equal(String(error.message).includes(SYNTHETIC), false);
+        return true;
+      },
+    );
+  }
+  assert.equal(reads, 0);
+});
+
+test("the largest safe byte limit and the largest timer delay are accepted at creation", () => {
+  assert.doesNotThrow(() =>
+    policyHook({ maxBytes: Number.MAX_SAFE_INTEGER, timeoutMs: 2147483647 }),
+  );
+  assert.doesNotThrow(() => policyHook({ maxBytes: 1, timeoutMs: 1 }));
+});
+
+test("a body of exactly the byte limit is accepted, and one byte over is refused before any JSON parse", async () => {
+  const size = encoder.encode(JSON_BODY).byteLength;
+  const exact = eventFor(requestFor(JSON_BODY));
+  await policyHook({ maxBytes: size, timeoutMs: 5000 })(exact);
+  assert.deepEqual(
+    (await bodyOf(exact.request)).generationConfig.thinkingConfig,
+    PRO_HIGH,
+  );
+
+  // Not valid JSON: a parse would fail, so the size error proves the count runs before parsing.
+  const over = requestFor("x".repeat(size + 1));
+  const event = eventFor(over);
+  await rejectsWith(
+    policyHook({ maxBytes: size, timeoutMs: 5000 })(event),
+    "body-too-large",
+  );
+  assert.equal(event.request, over);
+});
+
+test("one chunk larger than the limit is refused and is not kept", async () => {
+  const request = new Request(URL_BASE, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-goog-api-key": KEY },
+    body: new Uint8Array(4096),
+  });
+  const event = eventFor(request);
+  await rejectsWith(
+    policyHook({ maxBytes: 1024, timeoutMs: 5000 })(event),
+    "body-too-large",
+  );
+  assert.equal(event.request, request);
+});
+
+test("real Request streams count intrinsic chunk bytes instead of shadow byteLength properties", async () => {
+  const bytes = encoder.encode(JSON_BODY);
+  let getterReads = 0;
+  Object.defineProperty(bytes, "byteLength", {
+    configurable: true,
+    get() {
+      getterReads += 1;
+      throw new Error(SYNTHETIC);
+    },
+  });
+  const tooLarge = streamRequest(
+    lazyStream({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+  );
+  const tooLargeEvent = eventFor(tooLarge);
+  await rejectsWith(
+    policyHook({
+      maxBytes: encoder.encode(JSON_BODY).byteLength - 1,
+      timeoutMs: 5000,
+    })(tooLargeEvent),
+    "body-too-large",
+  );
+  assert.equal(getterReads, 0);
+  assert.equal(tooLargeEvent.request, tooLarge);
+  assert.equal(tooLarge.bodyUsed, false);
+  const originalReader = tooLarge.body.getReader();
+  try {
+    const originalChunk = await originalReader.read();
+    const typedArrayByteLength = Object.getOwnPropertyDescriptor(
+      Object.getPrototypeOf(Uint8Array.prototype),
+      "byteLength",
+    ).get;
+    const originalByteLength = typedArrayByteLength.call(originalChunk.value);
+    const originalBytes = new Uint8Array(originalByteLength);
+    for (let index = 0; index < originalByteLength; index += 1) {
+      originalBytes[index] = originalChunk.value[index];
+    }
+    assert.equal(new TextDecoder().decode(originalBytes), JSON_BODY);
+    assert.equal((await originalReader.read()).done, true);
+  } finally {
+    originalReader.releaseLock();
+  }
+
+  const underLimitBytes = encoder.encode(JSON_BODY);
+  Object.defineProperty(underLimitBytes, "byteLength", { value: 0 });
+  const underLimit = streamRequest(
+    lazyStream({
+      start(controller) {
+        controller.enqueue(underLimitBytes);
+        controller.close();
+      },
+    }),
+  );
+  const underLimitEvent = eventFor(underLimit);
+  await policyHook({
+    maxBytes: encoder.encode(JSON_BODY).byteLength,
+    timeoutMs: 5000,
+  })(underLimitEvent);
+  assert.deepEqual(
+    (await bodyOf(underLimitEvent.request)).generationConfig.thinkingConfig,
+    PRO_HIGH,
+  );
+  assert.equal(underLimit.bodyUsed, false);
+});
+
+test("zero-byte chunks cannot defer a monotonic read deadline", async (t) => {
+  let now = 0;
+  let pulled = 0;
+  t.mock.method(performance, "now", () => now++);
+  const pending = streamingRequest(
+    lazyStream({
+      pull(stream) {
+        pulled += 1;
+        stream.enqueue(new Uint8Array());
+        if (pulled === 8) {
+          stream.close();
+        }
+      },
+    }),
+  );
+  const event = eventFor(pending);
+  await rejectsWith(
+    policyHook({ maxBytes: 8, timeoutMs: 2 })(event),
+    "read-timeout",
+  );
+  assert.ok(
+    pulled < 8,
+    `deadline stopped the source after ${pulled} empty chunks`,
+  );
+  assert.equal(event.request, pending);
+});
+
+test("many one-byte chunks stop at the first chunk past the limit, without pulling the source to its end", async () => {
+  let pulled = 0;
+  const source = lazyStream({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(new Uint8Array([0x20]));
+      if (pulled === 1000) {
+        controller.close();
+      }
+    },
+  });
+  const request = streamRequest(source);
+  const event = eventFor(request);
+  await rejectsWith(
+    policyHook({ maxBytes: 10, timeoutMs: 5000 })(event),
+    "body-too-large",
+  );
+  assert.ok(pulled <= 20, `source pulled ${pulled} times`);
+  assert.equal(event.request, request);
+});
+
+test("multibyte characters split across chunks decode as text() would, a BOM is stripped, and invalid bytes become U+FFFD", async () => {
+  const text = "é€😀";
+  const bytes = encoder.encode(
+    JSON.stringify({ contents: [{ role: "user", parts: [{ text }] }] }),
+  );
+  const withBom = new Uint8Array([0xef, 0xbb, 0xbf, ...bytes]);
+  const split = lazyStream({
+    start(controller) {
+      for (const byte of withBom) {
+        controller.enqueue(new Uint8Array([byte]));
+      }
+      controller.close();
+    },
+  });
+  const first = eventFor(streamRequest(split));
+  await policyHook(TEST_READ_POLICY)(first);
+  assert.equal((await bodyOf(first.request)).contents[0].parts[0].text, text);
+
+  // Invalid UTF-8 inside a JSON string. The oracle is the platform text() decoder on the same bytes.
+  const invalid = new Uint8Array([
+    ...encoder.encode('{"contents":[{"role":"user","parts":[{"text":"a'),
+    0xff,
+    ...encoder.encode('b"}]}]}'),
+  ]);
+  const oracle = JSON.parse(await new Response(invalid).text());
+  const second = eventFor(
+    streamRequest(
+      lazyStream({
+        start(controller) {
+          controller.enqueue(invalid);
+          controller.close();
+        },
+      }),
+    ),
+  );
+  await policyHook(TEST_READ_POLICY)(second);
+  const decoded = (await bodyOf(second.request)).contents[0].parts[0].text;
+  assert.equal(decoded, oracle.contents[0].parts[0].text);
+  assert.equal(decoded, "a\uFFFDb");
+});
+
+test("a read whose cloned stream never settles is refused at its deadline, even when its cancel never settles", async () => {
+  const pending = streamingRequest(
+    lazyStream({ cancel: () => new Promise(() => {}) }),
+  );
+  const event = eventFor(pending);
+  const started = Date.now();
+  await rejectsWith(
+    policyHook({ maxBytes: 1024, timeoutMs: 20 })(event),
+    "read-timeout",
+  );
+  assert.ok(Date.now() - started < 2000, "the deadline bounded the read");
+  assert.equal(event.request, pending);
+});
+
+test("a cancel that rejects is never awaited and surfaces no unhandled rejection", async () => {
+  const unhandled = [];
+  const listener = (reason) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", listener);
+  try {
+    const pending = streamingRequest(
+      lazyStream({
+        pull: () => new Promise(() => {}),
+        cancel: () => Promise.reject(new Error(SYNTHETIC)),
+      }),
+    );
+    await rejectsWith(
+      policyHook({ maxBytes: 1024, timeoutMs: 20 })(eventFor(pending)),
+      "read-timeout",
+    );
+    await sleep(30);
+    assert.equal(unhandled.length, 0);
+  } finally {
+    process.off("unhandledRejection", listener);
+  }
+});
+
+test("after an oversize refusal the original is unread and its body can still be read in full", async () => {
+  const original = requestFor(JSON_BODY);
+  const event = eventFor(original);
+  await rejectsWith(
+    policyHook({ maxBytes: 10, timeoutMs: 5000 })(event),
+    "body-too-large",
+  );
+  assert.equal(original.bodyUsed, false);
+  assert.equal(await original.text(), JSON_BODY);
+});
+
+test("after a deadline refusal the original is unread and its body can still be read in full", async () => {
+  const bytes = encoder.encode(JSON_BODY);
+  const pieces = [bytes.slice(0, 20), bytes.slice(20, 40), bytes.slice(40)];
+  const source = lazyStream({
+    async pull(controller) {
+      await sleep(15);
+      const piece = pieces.shift();
+      if (piece === undefined) {
+        controller.close();
+      } else {
+        controller.enqueue(piece);
+      }
+    },
+  });
+  const original = streamRequest(source);
+  const event = eventFor(original);
+  await rejectsWith(
+    policyHook({ maxBytes: 1 << 20, timeoutMs: 10 })(event),
+    "read-timeout",
+  );
+  assert.equal(original.bodyUsed, false);
+  assert.equal(await original.text(), JSON_BODY);
+});
+
+test("an original already aborted is refused before any clone or read", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error(SYNTHETIC));
+  const request = requestFor(JSON_BODY, { signal: controller.signal });
+  const clones = countClones(request);
+  const event = eventFor(request);
+  await rejectsWith(policyHook(TEST_READ_POLICY)(event), "read-aborted");
+  assert.equal(clones.calls, 0);
+  assert.equal(event.request, request);
+});
+
+test("an abort during the pending read rejects with an opaque abort code, and the request is kept", async () => {
+  const controller = new AbortController();
+  const pending = streamingRequest(
+    lazyStream({
+      pull: () => {
+        controller.abort(new Error(SYNTHETIC));
+        return new Promise(() => {});
+      },
+    }),
+    controller.signal,
+  );
+  const event = eventFor(pending);
+  await assert.rejects(policyHook(TEST_READ_POLICY)(event), (error) => {
+    assert.ok(error instanceof GoogleOwnedRequestError);
+    assert.equal(error.code, "read-aborted");
+    assert.equal(error.cause, undefined);
+    assert.equal(String(error.message).includes(SYNTHETIC), false);
+    return true;
+  });
+  assert.equal(event.request, pending);
+});
+
+test("an abort landing just before the final chunk and the close is still refused", async () => {
+  const controller = new AbortController();
+  const bytes = encoder.encode(JSON_BODY);
+  const pending = streamingRequest(
+    lazyStream({
+      pull(stream) {
+        controller.abort(new Error(SYNTHETIC));
+        stream.enqueue(bytes);
+        stream.close();
+      },
+    }),
+    controller.signal,
+  );
+  await rejectsWith(
+    policyHook(TEST_READ_POLICY)(eventFor(pending)),
+    "read-aborted",
+  );
+});
+
+test("an abort that lands inside the clone is not missed and refuses the read", async () => {
+  const controller = new AbortController();
+  const request = requestFor(JSON_BODY, { signal: controller.signal });
+  Object.defineProperty(request, "clone", {
+    value: () => {
+      controller.abort(new Error(SYNTHETIC));
+      return Request.prototype.clone.call(request);
+    },
+  });
+  const event = eventFor(request);
+  await rejectsWith(policyHook(TEST_READ_POLICY)(event), "read-aborted");
+  assert.equal(event.request, request);
+});
+
+test("signal, clone body and reader initialization failures use the opaque read error", async () => {
+  const cases = [
+    {
+      name: "signal getter",
+      request: {
+        method: "POST",
+        headers: new Headers({ "content-type": "application/json" }),
+        get signal() {
+          throw new Error(SYNTHETIC);
+        },
+        clone() {
+          throw new Error("must not clone");
+        },
+      },
+    },
+    {
+      name: "body getter",
+      request: {
+        method: "POST",
+        headers: new Headers({ "content-type": "application/json" }),
+        signal: new AbortController().signal,
+        clone() {
+          return {
+            get body() {
+              throw new Error(SYNTHETIC);
+            },
+          };
+        },
+      },
+    },
+    {
+      name: "missing reader method",
+      request: streamingRequest({}),
+    },
+    {
+      name: "reader method throws",
+      request: streamingRequest({
+        getReader() {
+          throw new Error(SYNTHETIC);
+        },
+      }),
+    },
+    {
+      name: "forged public reader error",
+      request: streamingRequest({
+        getReader() {
+          const error = new GoogleOwnedRequestError("body-too-large");
+          error.message = SYNTHETIC;
+          throw error;
+        },
+      }),
+    },
+  ];
+
+  const lockedBody = lazyStream({});
+  lockedBody.getReader();
+  cases.push({ name: "locked reader", request: streamingRequest(lockedBody) });
+
+  for (const { name, request } of cases) {
+    const event = eventFor(request);
+    await assert.rejects(policyHook(TEST_READ_POLICY)(event), (error) => {
+      assert.ok(error instanceof GoogleOwnedRequestError, name);
+      assert.equal(error.code, "read-failed", name);
+      assert.equal(error.cause, undefined, name);
+      assert.equal(String(error.message).includes(SYNTHETIC), false, name);
+      assert.equal(String(error.stack).includes(SYNTHETIC), false, name);
+      return true;
+    });
+    assert.equal(event.request, request, name);
+  }
+});
+
+test("a reader failure or a chunk that is not bytes is an opaque read failure that keeps the request", async () => {
+  const failing = streamingRequest(
+    lazyStream({
+      pull() {
+        throw new Error(SYNTHETIC);
+      },
+    }),
+  );
+  const failingEvent = eventFor(failing);
+  await assert.rejects(policyHook(TEST_READ_POLICY)(failingEvent), (error) => {
+    assert.ok(error instanceof GoogleOwnedRequestError);
+    assert.equal(error.code, "read-failed");
+    assert.equal(error.cause, undefined);
+    assert.equal(String(error.message).includes(SYNTHETIC), false);
+    return true;
+  });
+  assert.equal(failingEvent.request, failing);
+
+  const text = streamingRequest(
+    lazyStream({
+      start(controller) {
+        controller.enqueue("not bytes");
+        controller.close();
+      },
+    }),
+  );
+  await rejectsWith(
+    policyHook(TEST_READ_POLICY)(eventFor(text)),
+    "read-failed",
+  );
+});
+
+test("the deadline timer and request signal listener are released on success, read failures and partial setup", async (t) => {
+  const created = [];
+  const cleared = [];
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+  let failTimer = false;
+  let failClear = false;
+  t.mock.method(globalThis, "setTimeout", (...args) => {
+    if (failTimer) {
+      failTimer = false;
+      throw new Error(SYNTHETIC);
+    }
+    const handle = realSetTimeout(...args);
+    created.push(handle);
+    return handle;
+  });
+  t.mock.method(globalThis, "clearTimeout", (handle) => {
+    cleared.push(handle);
+    const result = realClearTimeout(handle);
+    if (failClear) {
+      failClear = false;
+      throw new Error(SYNTHETIC);
+    }
+    return result;
+  });
+
+  let partialSetupCancelCalls = 0;
+  let timerSetupBody;
+  let partialSetupBody;
+  const scenarios = [
+    {
+      name: "success",
+      code: null,
+      policy: TEST_READ_POLICY,
+      make: (controller) =>
+        requestFor(JSON_BODY, { signal: controller.signal }),
+      copyBody: () =>
+        lazyStream({
+          start(stream) {
+            stream.enqueue(encoder.encode(JSON_BODY));
+            stream.close();
+          },
+        }),
+    },
+    {
+      name: "oversize",
+      code: "body-too-large",
+      policy: { maxBytes: 10, timeoutMs: 5000 },
+      make: (controller) =>
+        requestFor(JSON_BODY, { signal: controller.signal }),
+      copyBody: () =>
+        lazyStream({
+          start(stream) {
+            stream.enqueue(encoder.encode(JSON_BODY));
+            stream.close();
+          },
+        }),
+    },
+    {
+      name: "deadline",
+      code: "read-timeout",
+      policy: { maxBytes: 1024, timeoutMs: 10 },
+      make: (controller) => streamRequest(lazyStream({}), controller.signal),
+      copyBody: () => lazyStream({}),
+    },
+    {
+      name: "abort",
+      code: "read-aborted",
+      policy: TEST_READ_POLICY,
+      make: (controller) =>
+        streamRequest(
+          lazyStream({
+            pull: () => {
+              controller.abort(new Error(SYNTHETIC));
+              return new Promise(() => {});
+            },
+          }),
+          controller.signal,
+        ),
+      nativeClone: true,
+      copyBody: (controller) =>
+        lazyStream({
+          pull: () => {
+            setImmediate(() => controller.abort(new Error(SYNTHETIC)));
+            return new Promise(() => {});
+          },
+        }),
+    },
+    {
+      name: "reader failure",
+      code: "read-failed",
+      policy: TEST_READ_POLICY,
+      make: (controller) =>
+        streamRequest(
+          lazyStream({
+            pull() {
+              throw new Error(SYNTHETIC);
+            },
+          }),
+          controller.signal,
+        ),
+      copyBody: () =>
+        lazyStream({
+          pull() {
+            throw new Error(SYNTHETIC);
+          },
+        }),
+    },
+    {
+      name: "timer setup failure",
+      code: "read-failed",
+      policy: TEST_READ_POLICY,
+      make: (controller) => streamRequest(lazyStream({}), controller.signal),
+      copyBody: () => {
+        timerSetupBody = lazyStream({});
+        return timerSetupBody;
+      },
+      before: () => {
+        failTimer = true;
+      },
+    },
+    {
+      name: "listener setup failure after registration",
+      code: "read-failed",
+      policy: TEST_READ_POLICY,
+      make: (controller) =>
+        streamRequest(
+          lazyStream({
+            cancel: () => {
+              partialSetupCancelCalls += 1;
+            },
+          }),
+          controller.signal,
+        ),
+      copyBody: () => {
+        partialSetupBody = lazyStream({
+          cancel: () => {
+            partialSetupCancelCalls += 1;
+          },
+        });
+        return partialSetupBody;
+      },
+      throwAfterAdd: true,
+    },
+    {
+      name: "listener cleanup failure",
+      code: "read-failed",
+      policy: TEST_READ_POLICY,
+      make: (controller) =>
+        requestFor(JSON_BODY, { signal: controller.signal }),
+      copyBody: () =>
+        lazyStream({
+          start(stream) {
+            stream.enqueue(encoder.encode(JSON_BODY));
+            stream.close();
+          },
+        }),
+      throwOnRemove: true,
+    },
+    {
+      name: "timer cleanup failure",
+      code: "read-failed",
+      policy: TEST_READ_POLICY,
+      make: (controller) =>
+        requestFor(JSON_BODY, { signal: controller.signal }),
+      copyBody: () =>
+        lazyStream({
+          start(stream) {
+            stream.enqueue(encoder.encode(JSON_BODY));
+            stream.close();
+          },
+        }),
+      before: () => {
+        failClear = true;
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const controller = new AbortController();
+    const request =
+      scenario.name === "success"
+        ? scenario.make(controller)
+        : {
+            method: "POST",
+            url: URL_BASE,
+            headers: new Headers({
+              "content-type": "application/json",
+              "x-goog-api-key": KEY,
+            }),
+            signal: controller.signal,
+            clone: () => ({ body: scenario.copyBody(controller) }),
+          };
+    const event = eventFor(request);
+    // Observe the exact signal read from the Request, not the controller's source signal. Rebuilding a Request can
+    // register a separate linked listener after the hook has removed its own listener.
+    const pendingAbortListeners = new Set();
+    const addedAbortListeners = [];
+    const removedAbortListeners = new Set();
+    const signal = request.signal;
+    assert.equal(signal, request.signal);
+    const addListener = signal.addEventListener.bind(signal);
+    const removeListener = signal.removeEventListener.bind(signal);
+    let addCalls = 0;
+    let removeCalls = 0;
+    signal.addEventListener = (type, listener, options) => {
+      if (type === "abort") {
+        addCalls += 1;
+        addedAbortListeners.push(listener);
+        pendingAbortListeners.add(listener);
+      }
+      const result = addListener(type, listener, options);
+      if (scenario.throwAfterAdd && type === "abort") {
+        throw new Error(SYNTHETIC);
+      }
+      return result;
+    };
+    signal.removeEventListener = (type, listener, options) => {
+      if (type === "abort") {
+        removeCalls += 1;
+        removedAbortListeners.add(listener);
+        pendingAbortListeners.delete(listener);
+      }
+      const result = removeListener(type, listener, options);
+      if (scenario.throwOnRemove && type === "abort") {
+        throw new Error(SYNTHETIC);
+      }
+      return result;
+    };
+    const createdBefore = created.length;
+    let code = null;
+    scenario.before?.();
+    try {
+      await policyHook(scenario.policy)(event);
+    } catch (error) {
+      assert.ok(error instanceof GoogleOwnedRequestError, scenario.name);
+      assert.equal(error.message.includes(SYNTHETIC), false, scenario.name);
+      code = error.code;
+    }
+    assert.equal(code, scenario.code, scenario.name);
+    const ours = created.slice(createdBefore);
+    if (scenario.name !== "timer setup failure") {
+      assert.ok(ours.length >= 1, `${scenario.name} armed a deadline`);
+    }
+    for (const handle of ours) {
+      assert.ok(
+        cleared.includes(handle),
+        `${scenario.name} released its timer`,
+      );
+    }
+    if (scenario.name === "timer setup failure") {
+      assert.equal(created.length, createdBefore);
+      assert.equal(timerSetupBody.locked, false);
+    }
+    if (scenario.name === "listener setup failure after registration") {
+      assert.equal(partialSetupBody.locked, false);
+    }
+    const expectedListenerCalls =
+      scenario.name === "timer setup failure"
+        ? 0
+        : scenario.name === "success"
+          ? 2
+          : 1;
+    assert.equal(
+      addCalls,
+      expectedListenerCalls,
+      `${scenario.name} added listeners`,
+    );
+    if (scenario.name === "timer setup failure") {
+      assert.equal(removeCalls, 0);
+    } else {
+      assert.equal(
+        removeCalls,
+        1,
+        `${scenario.name} removed its hook listener`,
+      );
+      assert.equal(removedAbortListeners.size, 1);
+      assert.ok(
+        addedAbortListeners.includes([...removedAbortListeners][0]),
+        `${scenario.name} removed a listener it registered`,
+      );
+    }
+    if (scenario.code !== null) {
+      assert.equal(
+        event.request,
+        request,
+        `${scenario.name} kept the original request`,
+      );
+    }
+  }
+  assert.equal(partialSetupCancelCalls, 1);
 });

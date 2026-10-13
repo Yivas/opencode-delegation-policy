@@ -10,8 +10,8 @@ import {
 import type { ThinkingLevel } from "./policies.js";
 
 // Inert request writer for an owned Google thinking binding. It is a function a future integration may register
-// as a session `http.request` callback. This module registers nothing, reads no session, configuration,
-// environment or credential, and sends nothing.
+// as a session `http.request` callback. This module registers nothing, loads no session, configuration or environment,
+// and sends nothing. Supplied request headers can contain credentials; the integrity checks read and preserve them.
 //
 // Position (opencode 8a8bd622): the `http.request` trigger receives the request after native body encoding and
 // auth. Callbacks run one after another in registration order without a catch, so a throw stops the trigger and
@@ -22,6 +22,12 @@ import type { ThinkingLevel } from "./policies.js";
 // Ownership is decided by an injected port, never by this module. The port classifies each request. This module
 // copies the binding it returns, checks that copy, and compares a fresh copy after the body read. It never chooses
 // a level, never replaces a variant and never reapplies or raises the output cap.
+//
+// The body is read through an explicit read policy supplied by the caller. It has no default. The policy bounds the
+// bytes collected from the cloned body and the time that collection may take. This is not a total memory bound: the
+// request tee and original branch, stream internals, parsed JSON and rebuilt body can retain additional data. The
+// deadline and abort listener cover the read phase only: the classification port is awaited without a bound, and the
+// synchronous JSON parse, serialization and event-loop time are not covered by any wall-clock guarantee.
 
 export type GoogleRequestErrorCode =
   | "ownership-failed"
@@ -32,6 +38,10 @@ export type GoogleRequestErrorCode =
   | "stale-content-length"
   | "shape-rejected"
   | "cap-invalid"
+  | "policy-invalid"
+  | "body-too-large"
+  | "read-timeout"
+  | "read-aborted"
   | "read-failed"
   | "parse-failed"
   | "request-changed"
@@ -51,6 +61,10 @@ const MESSAGES: Readonly<Record<GoogleRequestErrorCode, string>> =
       "owned Google request carries a content-length that would be stale",
     "shape-rejected": "owned Google request is not a supported JSON packet",
     "cap-invalid": "owned Google request output cap is not a finite number",
+    "policy-invalid": "owned Google request read policy is not a valid bound",
+    "body-too-large": "owned Google request body exceeds the read limit",
+    "read-timeout": "owned Google request body read exceeded its deadline",
+    "read-aborted": "owned Google request was aborted before its body was read",
     "read-failed": "owned Google request body could not be read",
     "parse-failed": "owned Google request body is not valid JSON",
     "request-changed":
@@ -110,9 +124,27 @@ export type GoogleOwnedRequestHook = (
   event: SessionHttpRequest,
 ) => Promise<void>;
 
+// The explicit bound for the body read. A caller supplies it; the module provides no default.
+export type GoogleRequestReadPolicy = {
+  readonly maxBytes: number;
+  readonly timeoutMs: number;
+};
+
+type GoogleRequestReadBounds = {
+  readonly maxBytes: number;
+  readonly timeoutMs: number;
+};
+
+// Node clamps larger timer delays, so a longer deadline would fire at once.
+const MAX_TIMER_DELAY_MS = 2147483647;
+const UNREADABLE = Symbol("unreadable");
+
+// The policy is validated and copied when the hook is created, before any request is classified or read.
 export function createGoogleOwnedRequestHook(
   ownership: GoogleRequestOwnership,
+  readPolicy: GoogleRequestReadPolicy,
 ): GoogleOwnedRequestHook {
+  const readBounds = readBoundsOf(readPolicy);
   return async (event) => {
     const first = await classifyOwnership(ownership, event);
     if (first === undefined) {
@@ -133,7 +165,7 @@ export function createGoogleOwnedRequestHook(
       throw fail("shape-rejected");
     }
 
-    const parsed = parsePacket(await readText(original));
+    const parsed = parsePacket(await readBoundedText(original, readBounds));
     const next = withThinkingConfig(parsed, control);
 
     // The ownership, the lifetime, the request object and the headers are checked again after the await, and before
@@ -163,6 +195,14 @@ export function createGoogleOwnedRequestHook(
 
 function fail(code: GoogleRequestErrorCode): GoogleOwnedRequestError {
   return new GoogleOwnedRequestError(code);
+}
+
+const READER_ERRORS = new WeakSet<GoogleOwnedRequestError>();
+
+function readerError(code: GoogleRequestErrorCode): GoogleOwnedRequestError {
+  const error = fail(code);
+  READER_ERRORS.add(error);
+  return error;
 }
 
 // The port may throw or reject with arbitrary values, including secrets. Each port failure becomes the fixed
@@ -302,13 +342,216 @@ function headerEntries(request: Request): Array<[string, string]> {
   return [...request.headers.entries()];
 }
 
-// Reads from a clone, so the original request stays readable for the caller.
-async function readText(request: Request): Promise<string> {
+function readBoundsOf(policy: unknown): GoogleRequestReadBounds {
+  let isArray: boolean;
   try {
-    return await request.clone().text();
+    isArray = Array.isArray(policy);
   } catch {
+    throw fail("policy-invalid");
+  }
+  if (typeof policy !== "object" || policy === null || isArray) {
+    throw fail("policy-invalid");
+  }
+  const maxBytes = ownValue(policy, "maxBytes");
+  const timeoutMs = ownValue(policy, "timeoutMs");
+  if (
+    !isBoundedInteger(maxBytes, Number.MAX_SAFE_INTEGER) ||
+    !isBoundedInteger(timeoutMs, MAX_TIMER_DELAY_MS)
+  ) {
+    throw fail("policy-invalid");
+  }
+  return Object.freeze({ maxBytes, timeoutMs });
+}
+
+// Reads one own data property. Missing and inherited keys, accessors and throwing descriptor traps all yield
+// UNREADABLE. A proxy trap can run code, so a throwing trap is caught here rather than assumed not to run.
+function ownValue(record: object, key: string): unknown {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    if (descriptor === undefined || !("value" in descriptor)) {
+      return UNREADABLE;
+    }
+    return descriptor.value;
+  } catch {
+    return UNREADABLE;
+  }
+}
+
+function isBoundedInteger(value: unknown, max: number): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= max
+  );
+}
+
+// Reads the cloned body incrementally. The original request is never read, cancelled or consumed. Bytes are counted
+// with the intrinsic TypedArray byteLength getter before any chunk is retained or decoded. Every setup step is inside
+// the opaque error boundary, and acquired resources are released on every outcome.
+async function readBoundedText(
+  original: Request,
+  bounds: GoogleRequestReadBounds,
+): Promise<string> {
+  let signal: AbortSignal | undefined;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let listenerAttempted = false;
+  let abortListener: (() => void) | undefined;
+  let abandon = false;
+  let failure: GoogleOwnedRequestError | undefined;
+  let text: string | undefined;
+
+  try {
+    signal = original.signal;
+    if (signal.aborted) {
+      throw readerError("read-aborted");
+    }
+
+    const copy = original.clone();
+    if (signal.aborted) {
+      throw readerError("read-aborted");
+    }
+    const body = copy.body;
+    if (signal.aborted) {
+      throw readerError("read-aborted");
+    }
+    if (body === null) {
+      text = "";
+    } else {
+      reader = body.getReader();
+      const deadline = performance.now() + bounds.timeoutMs;
+      let rejectInterruption: (reason: unknown) => void = () => undefined;
+      const interruption = new Promise<never>((_, rejectPromise) => {
+        rejectInterruption = rejectPromise;
+      });
+      interruption.catch(() => undefined);
+      abortListener = (): void =>
+        rejectInterruption(readerError("read-aborted"));
+
+      timer = setTimeout(
+        () => rejectInterruption(readerError("read-timeout")),
+        bounds.timeoutMs,
+      );
+      listenerAttempted = true;
+      signal.addEventListener("abort", abortListener, { once: true });
+
+      const decoder = new TextDecoder("utf-8");
+      const pieces: string[] = [];
+      let received = 0;
+      for (;;) {
+        if (signal.aborted) {
+          throw readerError("read-aborted");
+        }
+        if (performance.now() >= deadline) {
+          throw readerError("read-timeout");
+        }
+        const step = await Promise.race([interruption, reader.read()]);
+        if (performance.now() >= deadline) {
+          throw readerError("read-timeout");
+        }
+        if (signal.aborted) {
+          throw readerError("read-aborted");
+        }
+        if (step.done) {
+          break;
+        }
+        if (!(step.value instanceof Uint8Array)) {
+          throw readerError("read-failed");
+        }
+        let chunkBytes: number;
+        try {
+          if (typeof TYPED_ARRAY_BYTE_LENGTH !== "function") {
+            throw new TypeError();
+          }
+          chunkBytes = Reflect.apply(TYPED_ARRAY_BYTE_LENGTH, step.value, []);
+        } catch {
+          throw readerError("read-failed");
+        }
+        if (chunkBytes > bounds.maxBytes - received) {
+          throw readerError("body-too-large");
+        }
+        received += chunkBytes;
+        const piece = decoder.decode(step.value, { stream: true });
+        if (piece !== "") {
+          pieces.push(piece);
+        }
+      }
+      const finalPiece = decoder.decode();
+      if (finalPiece !== "") {
+        pieces.push(finalPiece);
+      }
+      text = pieces.join("");
+    }
+  } catch (error) {
+    abandon = true;
+    failure =
+      error instanceof GoogleOwnedRequestError && READER_ERRORS.has(error)
+        ? error
+        : fail("read-failed");
+  } finally {
+    let cleanupSucceeded = true;
+    if (timer !== undefined) {
+      try {
+        clearTimeout(timer);
+      } catch {
+        cleanupSucceeded = false;
+      }
+    }
+    if (
+      listenerAttempted &&
+      signal !== undefined &&
+      abortListener !== undefined
+    ) {
+      try {
+        signal.removeEventListener("abort", abortListener);
+      } catch {
+        cleanupSucceeded = false;
+      }
+    }
+    if (reader !== undefined) {
+      cleanupSucceeded = releaseReader(reader, abandon) && cleanupSucceeded;
+    }
+    if (!cleanupSucceeded && failure === undefined) {
+      failure = fail("read-failed");
+    }
+  }
+
+  if (failure !== undefined) {
+    throw failure;
+  }
+  if (text === undefined) {
     throw fail("read-failed");
   }
+  return text;
+}
+
+const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype),
+  "byteLength",
+)?.get;
+
+// Releases only the cloned reader. Cancellation is observed but never awaited: a tee branch can wait for the original
+// branch, and a source may never settle. A pending read may keep the clone locked until the host settles it.
+function releaseReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  abandon: boolean,
+): boolean {
+  let succeeded = true;
+  if (abandon) {
+    try {
+      const cancellation = reader.cancel();
+      cancellation.catch(() => undefined);
+    } catch {
+      succeeded = false;
+    }
+  }
+  try {
+    reader.releaseLock();
+  } catch {
+    succeeded = false;
+  }
+  return succeeded;
 }
 
 type Packet = Record<string, unknown> & { readonly contents: unknown[] };

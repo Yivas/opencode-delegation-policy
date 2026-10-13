@@ -37,7 +37,8 @@ DeepSeek, Z.ai, Moonshot and Google controls. Native-field recognition and model
 carry separate evidence. A binary switch or capped budget can cover several logical levels; the
 result keeps the full compatible set separate from the levels admitted by a fixed/range policy.
 Variant names are not evidence. An explicit variant is never replaced, and the validator never
-chooses a variant or a per-run level.
+chooses a variant or a per-run level. Recognizing a native effort field does not establish a
+particular model's advertised support; the full model-specific Pi admission check remains unfinished.
 
 A separate, unwired adapter can plan and register owned budget variants for verified nonadaptive
 Anthropic models. It preserves user variants, rejects any reserved-prefix collision and waits for
@@ -57,8 +58,14 @@ restoring the scoped Pi budget or omitting inherited fields for `off` without ch
 It requires an injected authority for the exact child, parent, role, model, variant, registration
 lifetime and body-independent authentication. It preserves request options and rejects stale bindings
 or concurrent request changes. There is no production ownership authority or hook registration yet.
-It buffers owned bodies in memory, and later hooks can still rewrite its result. Local request doubles
-prove the component at its callback position, not the final wire or provider acceptance.
+Its factory requires an explicit `maxBytes`/`timeoutMs` read policy, with no production defaults.
+The cloned body is collected incrementally, counted using intrinsic byte lengths and cancelled on
+read failure without consuming the original. The deadline covers reading only, not ownership checks
+or synchronous parsing/serialization. Clone tee, source chunks, parsed JSON and rebuilt bodies can
+still increase memory use, and later hooks can rewrite the result. HTTP callbacks can access
+authentication headers; this is not a credential-isolated boundary. Restoring Pi's budget while
+keeping the total output cap can leave less answer room. Local request fixtures prove the component
+at its callback position, not whole-callback timing, final-wire controls or provider acceptance.
 
 Bedrock has a separate pure planner for all 47 exact adaptive Claude catalogue entries in Pi AI
 `0.87.1`. It resolves `xhigh` and `off` support per row, keeps compatible and admitted levels separate,
