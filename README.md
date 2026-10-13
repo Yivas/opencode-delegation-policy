@@ -96,9 +96,23 @@ outside policy admission. Pi payload hooks, native thinking settings, compatibil
 arbitrary control/cap body overlays and later peers remain unresolved conditions. No native comparator
 or role capability proof is added.
 
-Full thinking parity remains unfinished, including Gemini budget execution, wrapper translations
-and scoped `off` controls. Anthropic budget recipes are checked at the model-derived cap, not against
-an actual request's output/context limit. Unit tests do not prove the effective provider payload,
+A source-only Mistral Simple planner covers nine exact provider/API/model entries from Pi AI
+`0.87.1`. Its six effort entries map every advertised positive level to `reasoningEffort: "high"`;
+three others use `promptMode: "reasoning"`. Off omits both fields, without claiming physical
+disablement. Fixed/range results keep the full positive compatible set and admitted intersections;
+a range spanning off and positives returns both candidates without selecting one. The planner
+calculates virtual Simple caps from explicit caller-cap and estimate states, never filling unknowns
+with zero or clipping a supplied caller cap to the catalogue maximum. SDK clamping of `xhigh`/`max`
+to `high` is source evidence, not policy admission. The truthy API-key prerequisite, payload hooks,
+forwarded native settings, arbitrary body overlays and later writers remain unresolved. Control
+omission descriptors are not request settings or clearing overlays. There is no native-family
+registration, raw canonical planner, request consumer or role proof for these entries.
+
+Full thinking parity remains unfinished, including Azure/Codex Responses translations, other
+model/wrapper branches, Gemini budget execution and scoped `off` controls. Pi-messages forwarding
+also leaves server-side translation unresolved. Anthropic budget recipes are checked at the
+model-derived cap, not against an actual request's output/context limit. Unit tests do not prove
+the effective provider payload,
 launch choice or provider behavior.
 
 Real plugin loading, policy injection, native agents/launches, terminal UI, packaging and host
