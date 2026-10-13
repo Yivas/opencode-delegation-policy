@@ -87,6 +87,15 @@ public events expose no request ID for authoritative cross-stage correlation. It
 JSON body and has no timeout or cancellation policy, so an open stream can leave it pending.
 These resource limits must be addressed before integration; no callback is registered.
 
+A source-only planner covers the other 54 exact Bedrock reasoning entries in the same snapshot.
+Pi's builder emits no thinking control for those entries; this is not a claim that thinking is disabled
+or that a real request has no control. The planner preserves each row's five or six advertised levels,
+keeps admitted and compatible sets separate, and calculates Simple/raw caps without choosing a level.
+All seven canonical inputs share the builder result, but unadvertised `max` and scoped `xhigh` remain
+outside policy admission. Pi payload hooks, native thinking settings, compatibility overrides,
+arbitrary control/cap body overlays and later peers remain unresolved conditions. No native comparator
+or role capability proof is added.
+
 Full thinking parity remains unfinished, including Gemini budget execution, wrapper translations
 and scoped `off` controls. Anthropic budget recipes are checked at the model-derived cap, not against
 an actual request's output/context limit. Unit tests do not prove the effective provider payload,
