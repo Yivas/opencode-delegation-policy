@@ -65,7 +65,15 @@ model ID must use `openai/`; only the verified native branch strips that prefix 
 A custom REST `baseURL` remains unresolved, and a missing declared `accountId` is an unproven
 construction prerequisite, not an authentication result. Cloudflare requires explicit automatic
 summary and does not advertise off in this snapshot. No model reference or request is rewritten.
-Copilot and full model-specific thinking admission remain unfinished.
+GitHub Copilot adds its 17 exact source rows through the declared `aisdk:@ai-sdk/github-copilot`
+package and its separate Responses bridge. The route uses the `responses`/`chat` setting before
+its documented model-ID fallback. Positive recipes need explicit effort and automatic summary;
+the lowerer adds encrypted reasoning. Its effective settings schema accepts three include values,
+not all seven from the API type. Pi's two advertised Copilot off recipes remain unproven because
+they require omission, not the include that this lowerer forces.
+
+All 106 Responses catalogue rows now have source-level admission rules. That does not complete
+thinking adaptation: unresolved metadata, omission gaps, other APIs and runtime gates remain.
 
 A separate, unwired adapter can plan and register owned budget variants for verified nonadaptive
 Anthropic models. It preserves user variants, rejects any reserved-prefix collision and waits for

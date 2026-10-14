@@ -11,6 +11,7 @@ const PACKAGE_BY_PROVIDER = Object.freeze({
   xai: "@opencode/ai/providers/xai",
   meta: "@opencode/ai/providers/meta/responses",
   "cloudflare-ai-gateway": "@opencode/ai/providers/cloudflare-ai-gateway",
+  "github-copilot": "aisdk:@ai-sdk/github-copilot",
 });
 const OPENCODE_FACADE_PACKAGES = new Set([
   "@opencode/ai/providers/openai",
@@ -735,7 +736,173 @@ const PI_OPENCODE = "pi-ai@0.87.1 providers/data/opencode.json";
 const PI_OPENCODE_GO = "pi-ai@0.87.1 providers/data/opencode-go.json";
 const META_RESPONSES_EVIDENCE =
   "OpenCode 8a8bd622 packages/ai/src/providers/meta/responses.ts + protocols/meta-responses.ts + providers/meta.ts";
+const COPILOT_RESPONSES_EVIDENCE =
+  "OpenCode 8a8bd622 packages/core/src/github-copilot/responses/openai-responses-language-model.ts + packages/core/src/aisdk.ts + packages/core/src/plugin/provider/github-copilot.ts + packages/core/src/provider.ts";
 const SAFE_NON_REASONING_INCLUDES = new Set(["code_interpreter_call.outputs"]);
+// The Copilot lowerer's runtime schema is narrower than its API include type.
+const COPILOT_INCLUDE_VALUES = new Set([
+  ENCRYPTED_REASONING,
+  "file_search_call.results",
+  "message.output_text.logprobs",
+]);
+const COPILOT_LEVEL_MAPS: Readonly<
+  Record<string, Readonly<Record<string, string | null>>>
+> = Object.freeze({
+  "github-copilot/gpt-5-mini": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "github-copilot/gpt-5.3-codex": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "github-copilot/gpt-5.4": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "github-copilot/gpt-5.4-mini": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "github-copilot/gpt-5.4-nano": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "github-copilot/gpt-5.5": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "github-copilot/gpt-5.6-luna": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "github-copilot/gpt-5.6-sol": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "github-copilot/gpt-5.6-terra": {
+    off: null,
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "github-copilot/gpt-6-astra": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "github-copilot/gpt-6-luna": {
+    off: "none",
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "github-copilot/gpt-6-sol": {
+    off: "none",
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "github-copilot/grok-4.5": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "github-copilot/grok-4.6": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "github-copilot/grok-4.7": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "github-copilot/mai-code-1-flash-picker": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "github-copilot/mai-code-1.1-flash": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+});
+for (const levels of Object.values(COPILOT_LEVEL_MAPS)) Object.freeze(levels);
 
 // Source-level admission does not authenticate a provider or prove the final wire. The returned
 // proof names both the exact Pi row and the native projection constraints used by this matcher.
@@ -747,7 +914,16 @@ export function admitResponsesVariant(
   if (identity.kind === "outside-scope") return identity;
   if (identity.kind !== "resolved") return { kind: "unresolved" };
 
-  const rawLevels = LEVEL_MAPS[`${identity.provider}/${identity.modelID}`];
+  if (
+    identity.provider === "github-copilot" &&
+    !hasCopilotResponsesRoute(model, variant, identity.modelID)
+  ) {
+    return { kind: "unresolved" };
+  }
+  const rawLevels =
+    identity.provider === "github-copilot"
+      ? COPILOT_LEVEL_MAPS[`${identity.provider}/${identity.modelID}`]
+      : LEVEL_MAPS[`${identity.provider}/${identity.modelID}`];
   if (rawLevels === undefined) return { kind: "unresolved" };
   if (
     identity.provider === "cloudflare-ai-gateway" &&
@@ -779,13 +955,16 @@ export function admitResponsesVariant(
       unsupportedLevels,
     };
   }
-  const controls = readControls(
-    model,
-    variant,
-    identity.provider,
-    identity.modelID,
-    identity.route,
-  );
+  const controls =
+    identity.provider === "github-copilot"
+      ? readCopilotControls(model, variant)
+      : readControls(
+          model,
+          variant,
+          identity.provider,
+          identity.modelID,
+          identity.route,
+        );
   if (controls === undefined)
     return { kind: "unproven-controls", advertisedLevels, unsupportedLevels };
 
@@ -794,14 +973,17 @@ export function admitResponsesVariant(
     (level) =>
       level !== "off" && levels[level] !== null && levels[level] === effort,
   );
-  const offAdmitted = levels.off !== null;
+  const offAdmitted =
+    identity.provider !== "github-copilot" && levels.off !== null;
   const expectedOffInclude =
     identity.provider === "xai" ? "encrypted" : "absent";
+  const positiveIncludeMatches =
+    identity.provider === "github-copilot"
+      ? includesCopilotEncryptedReasoning(controls.include)
+      : controls.include === undefined ||
+        includeContainsReasoning(controls.include);
   const positiveControlsMatch =
-    controls.summary === "auto" &&
-    includeContainsReasoning(controls.include) &&
-    (controls.include === undefined ||
-      isValidLogicalIncludes(controls.include));
+    controls.summary === "auto" && positiveIncludeMatches;
   const offControlsMatch =
     effort === "none" &&
     controls.summary === undefined &&
@@ -819,24 +1001,28 @@ export function admitResponsesVariant(
   }
 
   const sourceFile =
-    identity.provider === "cloudflare-ai-gateway"
-      ? "pi-ai@0.87.1 providers/data/cloudflare-ai-gateway.json"
-      : identity.provider === "openai"
-        ? PI_OPENAI
-        : identity.provider === "xai"
-          ? PI_XAI
-          : identity.provider === "meta"
-            ? PI_META
-            : identity.provider === "opencode"
-              ? PI_OPENCODE
-              : PI_OPENCODE_GO;
+    identity.provider === "github-copilot"
+      ? "pi-ai@0.87.1 providers/data/github-copilot.json"
+      : identity.provider === "cloudflare-ai-gateway"
+        ? "pi-ai@0.87.1 providers/data/cloudflare-ai-gateway.json"
+        : identity.provider === "openai"
+          ? PI_OPENAI
+          : identity.provider === "xai"
+            ? PI_XAI
+            : identity.provider === "meta"
+              ? PI_META
+              : identity.provider === "opencode"
+                ? PI_OPENCODE
+                : PI_OPENCODE_GO;
   const projection = offCompatible
     ? expectedOffInclude === "encrypted"
       ? "OpenCode Responses projection: effort=none, summary absent, encrypted include retained"
       : "OpenCode Responses projection: effort=none, summary absent, include absent"
-    : identity.provider === "meta"
-      ? "OpenCode Meta Responses projection: mapped effort, summary=auto required, encrypted include retained"
-      : "OpenCode Responses projection: mapped effort, summary=auto, encrypted include retained";
+    : identity.provider === "github-copilot"
+      ? "Copilot Responses projection: effort and summary=auto required; encrypted include is forced before caller body overlay"
+      : identity.provider === "meta"
+        ? "OpenCode Meta Responses projection: mapped effort, summary=auto required, encrypted include retained"
+        : "OpenCode Responses projection: mapped effort, summary=auto, encrypted include retained";
   return {
     kind: "matched",
     advertisedLevels,
@@ -845,7 +1031,7 @@ export function admitResponsesVariant(
     proof: {
       transportKind: "native",
       compatibleLevels: compatible,
-      evidence: `${sourceFile} ${identity.provider}/${identity.modelID}; ${identity.provider === "meta" ? META_RESPONSES_EVIDENCE : RESPONSES_EVIDENCE}; ${projection} (conditional, not final wire)`,
+      evidence: `${sourceFile} ${identity.provider}/${identity.modelID}; ${identity.provider === "github-copilot" ? COPILOT_RESPONSES_EVIDENCE : identity.provider === "meta" ? META_RESPONSES_EVIDENCE : RESPONSES_EVIDENCE}; ${projection} (conditional, not final wire)`,
     },
   };
 }
@@ -870,12 +1056,13 @@ function completeLevelMap(
 
 type ResponsesProvider =
   | "openai"
+  | "github-copilot"
   | "xai"
   | "meta"
   | "opencode"
   | "opencode-go"
   | "cloudflare-ai-gateway";
-type ResponsesRoute = "native" | "facade" | "generic";
+type ResponsesRoute = "native" | "facade" | "generic" | "copilot";
 type Identity =
   | { readonly kind: "outside-scope" }
   | { readonly kind: "unresolved" }
@@ -902,19 +1089,22 @@ function readIdentity(model: ThinkingModel): Identity {
     const isOpencodeProvider =
       typeof providerID === "string" && OPENCODE_PROVIDER_IDS.has(providerID);
     const isCloudflareProvider = providerID === "cloudflare-ai-gateway";
+    const isCopilotProvider = providerID === "github-copilot";
     const knownProvider =
       providerID === "openai" ||
       providerID === "xai" ||
       providerID === "meta" ||
       isOpencodeProvider ||
-      isCloudflareProvider;
+      isCloudflareProvider ||
+      isCopilotProvider;
     const knownPackage =
       Object.values(PACKAGE_BY_PROVIDER).some(
         (value) => value === packageName,
       ) ||
       (typeof packageName === "string" &&
         OPENCODE_FACADE_PACKAGES.has(packageName)) ||
-      packageName === OPENCODE_GENERIC_RESPONSES_PACKAGE;
+      packageName === OPENCODE_GENERIC_RESPONSES_PACKAGE ||
+      packageName === PACKAGE_BY_PROVIDER["github-copilot"];
     if (!knownProvider && !knownPackage) return { kind: "outside-scope" };
     if (typeof providerID !== "string" || typeof packageName !== "string")
       return { kind: "unresolved" };
@@ -928,6 +1118,10 @@ function readIdentity(model: ThinkingModel): Identity {
     } else if (isCloudflareProvider) {
       if (packageName !== PACKAGE_BY_PROVIDER["cloudflare-ai-gateway"])
         return { kind: "unresolved" };
+    } else if (isCopilotProvider) {
+      if (packageName !== PACKAGE_BY_PROVIDER["github-copilot"])
+        return { kind: "unresolved" };
+      route = "copilot";
     } else {
       const expectedPackage =
         PACKAGE_BY_PROVIDER[providerID as keyof typeof PACKAGE_BY_PROVIDER];
@@ -967,6 +1161,132 @@ function readIdentity(model: ThinkingModel): Identity {
 }
 
 type Controls = { effort: unknown; summary: unknown; include: unknown };
+
+function hasCopilotResponsesRoute(
+  model: ThinkingModel,
+  variant: ThinkingVariant,
+  modelID: string,
+): boolean {
+  try {
+    if (
+      ["settings"].some((key) => hasAccessor(model, key)) ||
+      ["settings"].some((key) => hasAccessor(variant, key))
+    )
+      return false;
+    const modelSettings = ownData(model, "settings");
+    const variantSettings = ownData(variant, "settings");
+    if (
+      (modelSettings !== undefined && !isRecord(modelSettings)) ||
+      (variantSettings !== undefined && !isRecord(variantSettings)) ||
+      (modelSettings !== undefined && hasAccessor(modelSettings, "endpoint")) ||
+      (variantSettings !== undefined &&
+        hasAccessor(variantSettings, "endpoint"))
+    )
+      return false;
+    const variantEndpoint = ownData(variantSettings, "endpoint");
+    const endpoint =
+      variantEndpoint === undefined
+        ? ownData(modelSettings, "endpoint")
+        : variantEndpoint;
+    if (endpoint !== undefined) return endpoint === "responses";
+
+    const gpt = /^gpt-(\d+)/.exec(modelID);
+    return (
+      (gpt !== null &&
+        Number(gpt[1]) >= 5 &&
+        !modelID.startsWith("gpt-5-mini")) ||
+      modelID.startsWith("grok-") ||
+      modelID.startsWith("gemini-") ||
+      modelID.startsWith("mai-code-")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function readCopilotControls(
+  model: ThinkingModel,
+  variant: ThinkingVariant,
+): Controls | undefined {
+  try {
+    if (
+      ["settings", "body"].some((key) => hasAccessor(model, key)) ||
+      ["settings", "body"].some((key) => hasAccessor(variant, key))
+    )
+      return undefined;
+    const modelSettings = readCopilotSettings(ownData(model, "settings"));
+    const variantSettings = readCopilotSettings(ownData(variant, "settings"));
+    const body = mergeBody(
+      ownData(model, "body"),
+      ownData(variant, "body"),
+      isValidCopilotIncludes,
+    );
+    if (
+      modelSettings === undefined ||
+      variantSettings === undefined ||
+      body === undefined
+    )
+      return undefined;
+
+    let effort = overlaySetting(variantSettings.effort, modelSettings.effort);
+    let summary = overlaySetting(
+      variantSettings.summary,
+      modelSettings.summary,
+    );
+    if (body.hasEffort) effort = body.effort;
+    if (body.hasSummary) summary = body.summary;
+    const includes = overlaySetting(
+      variantSettings.include,
+      modelSettings.include,
+    );
+    const include = body.hasInclude
+      ? body.include
+      : [...(includes ?? []), ENCRYPTED_REASONING];
+    if (!includesCopilotEncryptedReasoning(include)) return undefined;
+    return { effort, summary, include };
+  } catch {
+    return undefined;
+  }
+}
+
+function readCopilotSettings(value: unknown):
+  | {
+      effort: unknown;
+      summary: unknown;
+      include: readonly string[] | undefined;
+    }
+  | undefined {
+  if (value === undefined)
+    return { effort: undefined, summary: undefined, include: undefined };
+  if (!isRecord(value)) return undefined;
+  for (const key of ["reasoningEffort", "reasoningSummary", "include"])
+    if (hasAccessor(value, key)) return undefined;
+  const effort = ownData(value, "reasoningEffort");
+  const summary = ownData(value, "reasoningSummary");
+  const include = ownData(value, "include");
+  if (
+    (effort !== undefined && effort !== null && typeof effort !== "string") ||
+    (summary !== undefined &&
+      summary !== null &&
+      typeof summary !== "string") ||
+    (include !== undefined &&
+      include !== null &&
+      !isValidCopilotIncludes(include))
+  )
+    return undefined;
+  return {
+    effort: effort === null ? undefined : effort,
+    summary: summary === null ? undefined : summary,
+    include: include === null ? undefined : include,
+  };
+}
+
+function overlaySetting<T>(
+  overlay: T | undefined,
+  base: T | undefined,
+): T | undefined {
+  return overlay === undefined ? base : overlay;
+}
 
 function readControls(
   model: ThinkingModel,
@@ -1179,6 +1499,9 @@ function readSettings(value: unknown): Settings | undefined {
 function mergeBody(
   base: unknown,
   overlay: unknown,
+  isValidIncludes: (
+    value: unknown,
+  ) => value is readonly string[] = isValidLogicalIncludes,
 ):
   | (Controls & {
       hasEffort: boolean;
@@ -1186,8 +1509,8 @@ function mergeBody(
       hasInclude: boolean;
     })
   | undefined {
-  const baseFields = bodyControls(base);
-  const overlayFields = bodyControls(overlay);
+  const baseFields = bodyControls(base, isValidIncludes);
+  const overlayFields = bodyControls(overlay, isValidIncludes);
   if (baseFields === undefined || overlayFields === undefined) return undefined;
   return {
     effort: overlayFields.hasEffort ? overlayFields.effort : baseFields.effort,
@@ -1203,7 +1526,12 @@ function mergeBody(
   };
 }
 
-function bodyControls(value: unknown):
+function bodyControls(
+  value: unknown,
+  isValidIncludes: (
+    value: unknown,
+  ) => value is readonly string[] = isValidLogicalIncludes,
+):
   | (Controls & {
       hasEffort: boolean;
       hasSummary: boolean;
@@ -1255,8 +1583,7 @@ function bodyControls(value: unknown):
     hasEffort = hasOwn(reasoning, "effort");
     hasSummary = hasOwn(reasoning, "summary");
   }
-  if (include !== undefined && !isValidLogicalIncludes(include))
-    return undefined;
+  if (include !== undefined && !isValidIncludes(include)) return undefined;
   return {
     effort,
     summary,
@@ -1303,8 +1630,21 @@ function isValidLogicalIncludes(value: unknown): value is readonly string[] {
   }
   return true;
 }
+function isValidCopilotIncludes(value: unknown): value is readonly string[] {
+  if (!isValidInclude(value)) return false;
+  for (let index = 0; index < value.length; index += 1)
+    if (!COPILOT_INCLUDE_VALUES.has(ownData(value, String(index)) as string))
+      return false;
+  return true;
+}
 function includeContainsReasoning(value: unknown): boolean {
   if (!isValidLogicalIncludes(value)) return false;
+  for (let index = 0; index < value.length; index += 1)
+    if (ownData(value, String(index)) === ENCRYPTED_REASONING) return true;
+  return false;
+}
+function includesCopilotEncryptedReasoning(value: unknown): boolean {
+  if (!isValidCopilotIncludes(value)) return false;
   for (let index = 0; index < value.length; index += 1)
     if (ownData(value, String(index)) === ENCRYPTED_REASONING) return true;
   return false;

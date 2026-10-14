@@ -1670,3 +1670,603 @@ test("Cloudflare does not infer facade defaults or source-model support for an u
     { ok: false, code: "thinking-identity-unresolved" },
   );
 });
+
+const COPILOT = "aisdk:@ai-sdk/github-copilot";
+const COPILOT_ROWS = [
+  ["gpt-5-mini", ["minimal", "low", "medium", "high"]],
+  ["gpt-5.3-codex", ["minimal", "low", "medium", "high", "xhigh"]],
+  ["gpt-5.4", ["minimal", "low", "medium", "high", "xhigh"]],
+  ["gpt-5.4-mini", ["minimal", "low", "medium", "high", "xhigh"]],
+  ["gpt-5.4-nano", ["minimal", "low", "medium", "high", "xhigh"]],
+  ["gpt-5.5", ["minimal", "low", "medium", "high", "xhigh"]],
+  ["gpt-5.6-luna", ["minimal", "low", "medium", "high", "xhigh", "max"]],
+  ["gpt-5.6-sol", ["minimal", "low", "medium", "high", "xhigh", "max"]],
+  ["gpt-5.6-terra", ["minimal", "low", "medium", "high", "xhigh", "max"]],
+  ["gpt-6-astra", ["low", "medium", "high", "xhigh", "max"]],
+  ["gpt-6-luna", ["off", "low", "medium", "high", "xhigh", "max"]],
+  ["gpt-6-sol", ["off", "low", "medium", "high", "xhigh", "max"]],
+  ["grok-4.5", ["low", "medium", "high"]],
+  ["grok-4.6", ["low", "medium", "high", "xhigh"]],
+  ["grok-4.7", ["low", "medium", "high", "xhigh"]],
+  ["mai-code-1-flash-picker", ["low", "medium", "high"]],
+  ["mai-code-1.1-flash", ["low", "medium", "high"]],
+];
+const COPILOT_PI_EFFORTS = {
+  "gpt-5-mini": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+  },
+  "gpt-5.3-codex": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+  },
+  "gpt-5.4": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+  },
+  "gpt-5.4-mini": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+  },
+  "gpt-5.4-nano": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+  },
+  "gpt-5.5": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+  },
+  "gpt-5.6-luna": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "gpt-5.6-sol": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "gpt-5.6-terra": {
+    minimal: "low",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "gpt-6-astra": {
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "gpt-6-luna": {
+    off: "none",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "gpt-6-sol": {
+    off: "none",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "grok-4.5": { low: "low", medium: "medium", high: "high" },
+  "grok-4.6": {
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+  },
+  "grok-4.7": {
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+  },
+  "mai-code-1-flash-picker": { low: "low", medium: "medium", high: "high" },
+  "mai-code-1.1-flash": { low: "low", medium: "medium", high: "high" },
+};
+const COPILOT_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+function copilotModel(id, overrides = {}) {
+  return model({
+    id,
+    modelID: id,
+    providerID: "github-copilot",
+    package: COPILOT,
+    variants: [],
+    ...overrides,
+  });
+}
+
+function copilotCandidate(level, overrides = {}) {
+  const effort = level === "off" ? "none" : level === "minimal" ? "low" : level;
+  return variant(level, effort, {
+    settings: {
+      reasoningEffort: effort,
+      reasoningSummary: level === "off" ? undefined : "auto",
+    },
+    ...overrides,
+  });
+}
+
+test("the exact 17 Copilot Responses rows cover every fixed level and inclusive range without selecting", () => {
+  assert.equal(COPILOT_ROWS.length, 17);
+  let fixedCases = 0;
+  let rangeCases = 0;
+  const expectedUnsupported = (levels) =>
+    COPILOT_LEVELS.filter((level) => !levels.includes(level));
+  for (const [id, advertised] of COPILOT_ROWS) {
+    const piEfforts = COPILOT_PI_EFFORTS[id];
+    assert.deepEqual(Object.keys(piEfforts), advertised, `${id} Pi map`);
+    const input = copilotModel(
+      id,
+      id === "gpt-5-mini" ? { settings: { endpoint: "responses" } } : {},
+    );
+    const source = admitResponsesVariant(input, {
+      id: "uncontrolled",
+      settings: { temperature: 0.3 },
+    });
+    assert.equal(source.kind, "unproven-controls", id);
+    assert.deepEqual(source.advertisedLevels, advertised, `${id} levels`);
+    assert.deepEqual(
+      source.unsupportedLevels,
+      expectedUnsupported(advertised),
+      `${id} explicit null and absent levels`,
+    );
+
+    for (const level of COPILOT_LEVELS) {
+      fixedCases += 1;
+      const candidate = copilotCandidate(level);
+      const result = selected(input, candidate, { from: level, to: level });
+      const expected = advertised.includes(level) && level !== "off";
+      assert.equal(result.ok, expected, `${id}:${level}`);
+      if (expected) {
+        const effort = level === "minimal" ? "low" : level;
+        const compatibleLevels = COPILOT_LEVELS.filter(
+          (candidateLevel) =>
+            candidateLevel !== "off" && piEfforts[candidateLevel] === effort,
+        );
+        assert.deepEqual(
+          result.selection.compatibleLevels,
+          compatibleLevels,
+          `${id}:${level} complete Pi effort class`,
+        );
+        assert.deepEqual(result.selection.admittedLevels, [level]);
+        assert.equal(result.selection.variant, level);
+        assert.match(result.selection.evidence, /github-copilot\.json/);
+        assert.match(
+          result.selection.evidence,
+          new RegExp(`github-copilot/${id}`),
+        );
+        assert.match(result.selection.evidence, /summary=auto required/);
+      } else if (level === "off" && advertised.includes(level)) {
+        assert.deepEqual(result, {
+          ok: false,
+          code: "thinking-controls-unproven",
+        });
+      } else {
+        assert.deepEqual(result, {
+          ok: false,
+          code: "thinking-pi-level-unsupported",
+        });
+      }
+    }
+
+    const variants = advertised
+      .filter((level) => level !== "off")
+      .map((level) => copilotCandidate(level));
+    if (advertised.includes("off")) variants.push(copilotCandidate("off"));
+    const resultModel = { ...input, variants };
+    for (let from = 0; from < COPILOT_LEVELS.length; from += 1) {
+      for (let to = from; to < COPILOT_LEVELS.length; to += 1) {
+        rangeCases += 1;
+        const range = {
+          from: COPILOT_LEVELS[from],
+          to: COPILOT_LEVELS[to],
+        };
+        const selectedRange = selectThinkingVariant(
+          resultModel,
+          range,
+          undefined,
+        );
+        const expected = variants.flatMap((item) => {
+          const level = item.id;
+          if (level === "off") return [];
+          const effort = level === "minimal" ? "low" : level;
+          const compatibleLevels = COPILOT_LEVELS.filter(
+            (candidateLevel) =>
+              candidateLevel !== "off" && piEfforts[candidateLevel] === effort,
+          );
+          const admittedLevels = compatibleLevels.filter((candidateLevel) => {
+            const position = COPILOT_LEVELS.indexOf(candidateLevel);
+            return position >= from && position <= to;
+          });
+          return admittedLevels.length > 0
+            ? [{ variant: level, compatibleLevels, admittedLevels }]
+            : [];
+        });
+        assert.equal(
+          selectedRange.ok,
+          expected.length > 0,
+          `${id}:${range.from}..${range.to}`,
+        );
+        if (expected.length > 0) {
+          assert.equal(selectedRange.selection.kind, "options");
+          assert.deepEqual(
+            selectedRange.selection.options.map(
+              ({ variant: variantID, compatibleLevels, admittedLevels }) => ({
+                variant: variantID,
+                compatibleLevels,
+                admittedLevels,
+              }),
+            ),
+            expected,
+            `${id}:${range.from}..${range.to}`,
+          );
+        } else {
+          assert.deepEqual(
+            selectedRange,
+            {
+              ok: false,
+              code:
+                advertised.includes("off") && range.from === "off"
+                  ? "thinking-unmapped"
+                  : COPILOT_LEVELS.slice(from, to + 1).some(
+                        (level) =>
+                          level !== "off" && advertised.includes(level),
+                      )
+                    ? "thinking-controls-unproven"
+                    : "thinking-pi-level-unsupported",
+            },
+            `${id}:${range.from}..${range.to}`,
+          );
+        }
+      }
+    }
+  }
+  assert.equal(fixedCases, 119);
+  assert.equal(rangeCases, 476);
+});
+
+test("Copilot matches only the exact declared package, provider, model ID, and Responses route", () => {
+  const highVariant = copilotCandidate("high");
+  const admitted = selected(copilotModel("gpt-6-luna"), highVariant, high);
+  assert.equal(admitted.ok, true);
+  assert.equal(admitted.selection.kind, "inline");
+  assert.equal(admitted.selection.variant, "high");
+  assert.deepEqual(admitted.selection.compatibleLevels, ["high"]);
+  assert.match(admitted.selection.evidence, /github-copilot\/gpt-6-luna/);
+  for (const sourcePath of [
+    "packages/core/src/github-copilot/responses/openai-responses-language-model.ts",
+    "packages/core/src/aisdk.ts",
+    "packages/core/src/plugin/provider/github-copilot.ts",
+    "packages/core/src/provider.ts",
+  ]) {
+    assert.ok(admitted.selection.evidence.includes(sourcePath), sourcePath);
+  }
+  assert.doesNotMatch(
+    admitted.selection.evidence,
+    /protocols\/utils\/open-responses-options\.ts/,
+    "Copilot evidence must not cite the generic Responses schema",
+  );
+
+  const mini = copilotModel("gpt-5-mini");
+  assert.deepEqual(admitResponsesVariant(mini, highVariant), {
+    kind: "unresolved",
+  });
+  assert.deepEqual(
+    selected(
+      { ...mini, settings: { endpoint: "responses" } },
+      highVariant,
+      high,
+    ).ok,
+    true,
+    "an explicitly declared Responses endpoint wins over the chat-only fallback",
+  );
+  for (const endpoint of [
+    "chat",
+    "/responses",
+    "/chat/completions",
+    "future-endpoint",
+    null,
+  ]) {
+    assert.deepEqual(
+      admitResponsesVariant(
+        copilotModel("gpt-6-luna", { settings: { endpoint } }),
+        highVariant,
+      ),
+      { kind: "unresolved" },
+      `endpoint ${String(endpoint)} is conservatively unresolved by admission; this does not claim the source rejects it`,
+    );
+  }
+  assert.equal(
+    selected(
+      copilotModel("gpt-6-luna", { settings: { endpoint: "chat" } }),
+      highVariant,
+      high,
+    ).ok,
+    false,
+  );
+  assert.equal(
+    selected(
+      copilotModel("gpt-6-luna", {
+        settings: { endpoint: "chat" },
+      }),
+      {
+        ...highVariant,
+        settings: { ...highVariant.settings, endpoint: "responses" },
+      },
+      high,
+    ).ok,
+    true,
+    "the variant endpoint overlay has precedence",
+  );
+
+  for (const overrides of [
+    { providerID: "openai" },
+    { providerID: "github-copilot", package: "ai-sdk:@ai-sdk/github-copilot" },
+    { providerID: "github-copilot", package: "@ai-sdk/github-copilot" },
+    { providerID: "github-copilot", package: "aisdk:@ai-sdk/openai" },
+    { providerID: "github-copilot", package: "@opencode/ai/providers/openai" },
+    { package: "ai-sdk:@ai-sdk/openai" },
+    { canonical: "enterprise.github-copilot" },
+    { modelID: "gpt-6-luna-alias" },
+    { id: "future-model", modelID: "future-model" },
+  ]) {
+    assert.deepEqual(
+      selected(copilotModel("gpt-6-luna", overrides), highVariant, high),
+      { ok: false, code: "thinking-identity-unresolved" },
+    );
+  }
+  assert.deepEqual(
+    selected(
+      copilotModel("gpt-6-luna", { canonical: "github-copilot" }),
+      highVariant,
+      high,
+    ).ok,
+    true,
+  );
+  assert.deepEqual(
+    selected(
+      copilotModel("gpt-6-luna", { modelID: undefined }),
+      highVariant,
+      high,
+    ).ok,
+    true,
+  );
+});
+
+test("Copilot requires explicit positive effort and summary while using the lowerer's encrypted include default", () => {
+  const input = copilotModel("gpt-6-luna");
+  const effortOnly = {
+    id: "effort-only",
+    settings: { reasoningEffort: "high" },
+  };
+  assert.deepEqual(selected(input, effortOnly, high), {
+    ok: false,
+    code: "thinking-controls-unproven",
+  });
+  const summaryOnly = {
+    id: "summary-only",
+    settings: { reasoningSummary: "auto" },
+  };
+  assert.deepEqual(selected(input, summaryOnly, high), {
+    ok: false,
+    code: "thinking-controls-unproven",
+  });
+  const positive = {
+    id: "high",
+    settings: { reasoningEffort: "high", reasoningSummary: "auto" },
+  };
+  assert.equal(selected(input, positive, high).ok, true);
+  for (const include of [
+    "file_search_call.results",
+    "reasoning.encrypted_content",
+    "message.output_text.logprobs",
+  ]) {
+    assert.equal(
+      selected(
+        input,
+        { ...positive, settings: { ...positive.settings, include: [include] } },
+        high,
+      ).ok,
+      true,
+      `Copilot accepts source-schema include ${include} with the lowerer's forced encrypted include`,
+    );
+    const bodyInclude =
+      include === "reasoning.encrypted_content"
+        ? [include]
+        : ["reasoning.encrypted_content", include];
+    assert.equal(
+      selected(input, { ...positive, body: { include: bodyInclude } }, high).ok,
+      true,
+      `Copilot accepts body overlay include ${include} when encrypted reasoning remains`,
+    );
+  }
+  for (const include of [
+    ["unsupported.include"],
+    "reasoning.encrypted_content",
+    [null],
+  ]) {
+    assert.deepEqual(
+      selected(
+        input,
+        { ...positive, settings: { ...positive.settings, include } },
+        high,
+      ),
+      { ok: false, code: "thinking-controls-unproven" },
+    );
+  }
+  for (const apiTypedButNotLowererAccepted of [
+    "web_search_call.action.sources",
+    "code_interpreter_call.outputs",
+    "computer_call_output.output.image_url",
+    "message.input_image.image_url",
+  ]) {
+    assert.deepEqual(
+      selected(
+        input,
+        {
+          ...positive,
+          settings: {
+            ...positive.settings,
+            include: [apiTypedButNotLowererAccepted],
+          },
+        },
+        high,
+      ),
+      { ok: false, code: "thinking-controls-unproven" },
+      `${apiTypedButNotLowererAccepted} is in the API type but not the lowerer's runtime include schema`,
+    );
+    assert.deepEqual(
+      selected(
+        input,
+        {
+          ...positive,
+          body: {
+            include: [
+              "reasoning.encrypted_content",
+              apiTypedButNotLowererAccepted,
+            ],
+          },
+        },
+        high,
+      ),
+      { ok: false, code: "thinking-controls-unproven" },
+      `body admission conservatively leaves ${apiTypedButNotLowererAccepted} unproven without claiming host rejection`,
+    );
+  }
+  assert.deepEqual(
+    selected(
+      input,
+      { ...positive, body: { reasoning: { effort: "low", summary: "auto" } } },
+      high,
+    ),
+    { ok: false, code: "thinking-variant-mismatch" },
+    "a body overlay that proves another Pi effort is a variant mismatch, not a high-level proof",
+  );
+  for (const body of [
+    { include: [] },
+    { include: ["file_search_call.results"] },
+    { reasoning: { effort: "high", summary: "detailed" } },
+  ]) {
+    assert.deepEqual(
+      selected(input, { ...positive, body }, high),
+      { ok: false, code: "thinking-controls-unproven" },
+      `caller body overlay ${JSON.stringify(body)} cannot be treated as Pi recipe`,
+    );
+  }
+  assert.equal(
+    selected(
+      input,
+      {
+        ...positive,
+        body: { temperature: 0.2, include: ["reasoning.encrypted_content"] },
+      },
+      high,
+    ).ok,
+    true,
+  );
+  assert.deepEqual(
+    selected(input, copilotCandidate("off"), { from: "off", to: "off" }),
+    { ok: false, code: "thinking-controls-unproven" },
+    "Pi's declared off-to-none cannot omit Copilot's forced encrypted include",
+  );
+});
+
+test("Copilot route and control readers do not execute accessors or inspect credential headers", () => {
+  let endpointReads = 0;
+  let effortReads = 0;
+  let summaryReads = 0;
+  let credentialReads = 0;
+  const settings = {};
+  Object.defineProperties(settings, {
+    endpoint: {
+      get() {
+        endpointReads += 1;
+        throw new Error("opaque");
+      },
+    },
+    reasoningEffort: {
+      get() {
+        effortReads += 1;
+        throw new Error("opaque");
+      },
+    },
+  });
+  const opaqueModel = copilotModel("gpt-6-luna", { settings });
+  const opaqueVariant = copilotCandidate("high", {
+    headers: Object.defineProperty({}, "authorization", {
+      get() {
+        credentialReads += 1;
+        throw new Error("must not read");
+      },
+    }),
+  });
+  assert.deepEqual(admitResponsesVariant(opaqueModel, opaqueVariant), {
+    kind: "unresolved",
+  });
+  assert.equal(endpointReads, 0);
+  assert.equal(effortReads, 0);
+  assert.equal(credentialReads, 0);
+
+  const controlSettings = { reasoningEffort: "high" };
+  Object.defineProperty(controlSettings, "reasoningSummary", {
+    get() {
+      summaryReads += 1;
+      throw new Error("must not run");
+    },
+  });
+  assert.deepEqual(
+    selected(
+      copilotModel("gpt-6-luna"),
+      {
+        id: "opaque",
+        settings: controlSettings,
+      },
+      high,
+    ),
+    { ok: false, code: "thinking-controls-unproven" },
+  );
+  assert.equal(effortReads, 0);
+  assert.equal(summaryReads, 0);
+  assert.equal(credentialReads, 0);
+});
