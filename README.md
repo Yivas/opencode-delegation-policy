@@ -76,8 +76,11 @@ they require omission, not the include that this lowerer forces.
 All 106 Responses catalogue rows now have source-level admission rules. That does not complete
 thinking adaptation: unresolved metadata, omission gaps, other APIs and runtime gates remain.
 
-A separate, unwired adapter can plan and register owned budget variants for six source-listed manual
-Anthropic models. Those variants are catalogue recipes, not thinking-level proofs: the native reader
+Plugin setup now connects the existing owned-variant provisioner to the public `model.transform`
+and `model.list` methods. It waits for registration and a valid callback result, using the read
+barrier if the callback is deferred, before returning cleanup for its own registration. This publishes budget metadata for six source-listed manual Anthropic models;
+it neither chooses a variant nor changes the principal model. Importing the entry has no host effects
+and does not load the SDK at runtime. Those variants are catalogue recipes, not thinking-level proofs: the native reader
 can reduce their budget using the request's `max_tokens`, which role validation does not know.
 Positive budget variants therefore remain unproven; disabled thinking still proves the scoped off
 level without reading an output limit. It preserves user variants, rejects any reserved-prefix collision and waits for
@@ -182,6 +185,7 @@ also leaves server-side translation unresolved. Anthropic catalogue budget calcu
 available separately; role validation does not treat them as proof at an unknown request cap. Unit tests do not prove
 the effective provider payload, launch choice or provider behavior.
 
+The setup seam is tested with synthetic model-domain doubles, not a running SDK or host.
 Real plugin loading, policy injection, native agents/launches, terminal UI, packaging and host
 integration remain unfinished. The manifest is private and has no release version.
 
