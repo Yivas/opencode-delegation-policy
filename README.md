@@ -51,7 +51,16 @@ the request. This is conditional source-snapshot evidence, not authentication, f
 provider acceptance. Five exact Meta Responses rows also use this selector through the verified
 `@opencode/ai/providers/meta/responses` route. They require explicit automatic summary; native
 Meta effort-only variants do not satisfy the Pi recipe. None advertises off, and only
-`muse-spark-1.3` advertises max. The other Responses wrappers and full model-specific admission remain unfinished.
+`muse-spark-1.3` advertises max.
+
+Another 34 exact Console/Go rows use declared `opencode`/`opencode-go` identities and known Responses
+package routes. The OpenAI facade and its Responses alias share their GPT-5 defaults; the generic
+`openai-compatible-responses` route has no automatic summary, but does inherit encrypted inclusion.
+The compatible base package is Chat and is not admitted as Responses. A missing declared generic
+`baseURL` is an unproven construction prerequisite, not proof of a bad model or a trusted endpoint.
+OpenCode off recipes omit both summary and inclusion regardless of the selected factory.
+Canonical conflicts and unknown routes remain unresolved; no request, identity or endpoint is changed.
+Cloudflare/Copilot and full model-specific thinking admission remain unfinished.
 
 A separate, unwired adapter can plan and register owned budget variants for verified nonadaptive
 Anthropic models. It preserves user variants, rejects any reserved-prefix collision and waits for

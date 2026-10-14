@@ -11,9 +11,15 @@ const PACKAGE_BY_PROVIDER = Object.freeze({
   xai: "@opencode/ai/providers/xai",
   meta: "@opencode/ai/providers/meta/responses",
 });
+const OPENCODE_FACADE_PACKAGES = new Set([
+  "@opencode/ai/providers/openai",
+  "@opencode/ai/providers/openai/responses",
+]);
+const OPENCODE_GENERIC_RESPONSES_PACKAGE =
+  "@opencode/ai/providers/openai-compatible-responses";
 
-// The table is a source-owned snapshot of Pi AI 0.87.1's OpenAI Responses, xAI and Meta
-// catalogue rows. Null means Pi does not advertise that level for the exact model.
+// Source-owned snapshots of exact Pi AI 0.87.1 catalogue rows. Explicit null means Pi does not
+// advertise that level; omitted minimal..high entries in the OpenCode rows map to themselves.
 const LEVEL_MAPS: Readonly<
   Record<string, Readonly<Record<string, string | null>>>
 > = Object.freeze({
@@ -334,6 +340,197 @@ const LEVEL_MAPS: Readonly<
     xhigh: "xhigh",
     max: null,
   },
+  // Pi AI 0.87.1 providers/data/opencode.json (openai-responses). Missing
+  // minimal..high entries use their level; explicit nulls remain unsupported.
+  "opencode/gpt-5": { off: null, xhigh: null, max: null },
+  "opencode/gpt-5-codex": {
+    off: null,
+    minimal: null,
+    xhigh: null,
+    max: null,
+  },
+  "opencode/gpt-5-nano": { off: null, xhigh: null, max: null },
+  "opencode/gpt-5.1": {
+    off: null,
+    minimal: null,
+    xhigh: null,
+    max: null,
+  },
+  "opencode/gpt-5.1-codex": {
+    off: null,
+    minimal: null,
+    xhigh: null,
+    max: null,
+  },
+  "opencode/gpt-5.1-codex-max": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.1-codex-mini": {
+    off: null,
+    minimal: null,
+    xhigh: null,
+    max: null,
+  },
+  "opencode/gpt-5.2": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.2-codex": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.3-codex": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.4": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.4-mini": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.4-nano": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.4-pro": {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.5": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.5-pro": {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/gpt-5.6-luna": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "opencode/gpt-5.6-sol": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "opencode/gpt-5.6-terra": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "opencode/gpt-6-astra": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "opencode/gpt-6-luna": {
+    off: "none",
+    minimal: null,
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "opencode/gpt-6-sol": {
+    off: "none",
+    minimal: null,
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "opencode/grok-4.5": {
+    off: null,
+    minimal: null,
+    xhigh: null,
+    max: null,
+  },
+  "opencode/grok-4.6": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/grok-build-0.1": {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: null,
+    xhigh: null,
+    max: null,
+  },
+  "opencode/muse-spark-1.2": { off: null, xhigh: "xhigh", max: null },
+  "opencode/muse-spark-1.2-contributor-free": {
+    off: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode/muse-spark-1.3": { off: null, xhigh: "xhigh", max: null },
+  "opencode/muse-spark-1.3-contributor-free": {
+    off: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  // Pi AI 0.87.1 providers/data/opencode-go.json (openai-responses).
+  "opencode-go/gpt-5.6-luna": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "opencode-go/grok-4.6": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode-go/grok-4.7": {
+    off: null,
+    minimal: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode-go/muse-spark-1.2-contributor": {
+    off: null,
+    xhigh: "xhigh",
+    max: null,
+  },
+  "opencode-go/muse-spark-1.3-contributor": {
+    off: null,
+    xhigh: "xhigh",
+    max: null,
+  },
 });
 
 for (const row of Object.values(LEVEL_MAPS)) {
@@ -359,7 +556,7 @@ export type ResponsesAdmission =
       readonly proof: ContractProof;
     }
   | {
-      readonly kind: "unproven-controls";
+      readonly kind: "unproven-controls" | "construction-unproven";
       readonly advertisedLevels: readonly ThinkingLevel[];
       readonly unsupportedLevels: readonly ThinkingLevel[];
     };
@@ -378,6 +575,8 @@ const RESPONSES_EVIDENCE =
 const PI_OPENAI = "pi-ai@0.87.1 providers/data/openai.json";
 const PI_XAI = "pi-ai@0.87.1 providers/data/xai.json";
 const PI_META = "pi-ai@0.87.1 providers/data/meta.json";
+const PI_OPENCODE = "pi-ai@0.87.1 providers/data/opencode.json";
+const PI_OPENCODE_GO = "pi-ai@0.87.1 providers/data/opencode-go.json";
 const META_RESPONSES_EVIDENCE =
   "OpenCode 8a8bd622 packages/ai/src/providers/meta/responses.ts + protocols/meta-responses.ts + providers/meta.ts";
 const SAFE_NON_REASONING_INCLUDES = new Set(["code_interpreter_call.outputs"]);
@@ -394,18 +593,26 @@ export function admitResponsesVariant(
 
   const rawLevels = LEVEL_MAPS[`${identity.provider}/${identity.modelID}`];
   if (rawLevels === undefined) return { kind: "unresolved" };
-  const levels = completeLevelMap(rawLevels);
+  const levels = completeLevelMap(rawLevels, identity);
   const advertisedLevels = CANONICAL_LEVELS.filter(
     (level) => levels[level] !== null,
   );
   const unsupportedLevels = CANONICAL_LEVELS.filter(
     (level) => levels[level] === null,
   );
+  if (identity.route === "generic" && !hasDeclaredBaseURL(model, variant)) {
+    return {
+      kind: "construction-unproven",
+      advertisedLevels,
+      unsupportedLevels,
+    };
+  }
   const controls = readControls(
     model,
     variant,
     identity.provider,
     identity.modelID,
+    identity.route,
   );
   if (controls === undefined)
     return { kind: "unproven-controls", advertisedLevels, unsupportedLevels };
@@ -444,11 +651,15 @@ export function admitResponsesVariant(
       ? PI_OPENAI
       : identity.provider === "xai"
         ? PI_XAI
-        : PI_META;
+        : identity.provider === "meta"
+          ? PI_META
+          : identity.provider === "opencode"
+            ? PI_OPENCODE
+            : PI_OPENCODE_GO;
   const projection = offCompatible
-    ? identity.provider === "openai"
-      ? "OpenCode Responses projection: effort=none, summary absent, include absent"
-      : "OpenCode Responses projection: effort=none, summary absent, encrypted include retained"
+    ? expectedOffInclude === "encrypted"
+      ? "OpenCode Responses projection: effort=none, summary absent, encrypted include retained"
+      : "OpenCode Responses projection: effort=none, summary absent, include absent"
     : identity.provider === "meta"
       ? "OpenCode Meta Responses projection: mapped effort, summary=auto required, encrypted include retained"
       : "OpenCode Responses projection: mapped effort, summary=auto, encrypted include retained";
@@ -467,23 +678,35 @@ export function admitResponsesVariant(
 
 function completeLevelMap(
   raw: Readonly<Record<string, string | null>>,
+  provider: Identity & { readonly kind: "resolved" },
 ): Record<ThinkingLevel, string | null> {
   return Object.fromEntries(
     CANONICAL_LEVELS.map((level) => [
       level,
-      level === "off" ? (raw.off ?? null) : (raw[level] ?? null),
+      Object.hasOwn(raw, level)
+        ? (raw[level] ?? null)
+        : level !== "off" &&
+            OPENCODE_PROVIDER_IDS.has(provider.provider) &&
+            ["minimal", "low", "medium", "high"].includes(level)
+          ? level
+          : null,
     ]),
   ) as Record<ThinkingLevel, string | null>;
 }
 
+type ResponsesProvider = "openai" | "xai" | "meta" | "opencode" | "opencode-go";
+type ResponsesRoute = "native" | "facade" | "generic";
 type Identity =
   | { readonly kind: "outside-scope" }
   | { readonly kind: "unresolved" }
   | {
       readonly kind: "resolved";
-      readonly provider: "openai" | "xai" | "meta";
+      readonly provider: ResponsesProvider;
       readonly modelID: string;
+      readonly route: ResponsesRoute;
     };
+
+const OPENCODE_PROVIDER_IDS = new Set(["opencode", "opencode-go"]);
 
 function readIdentity(model: ThinkingModel): Identity {
   try {
@@ -496,22 +719,37 @@ function readIdentity(model: ThinkingModel): Identity {
     }
     const providerID = ownData(model, "providerID");
     const packageName = ownData(model, "package");
-    const candidate =
+    const isOpencodeProvider =
+      typeof providerID === "string" && OPENCODE_PROVIDER_IDS.has(providerID);
+    const knownProvider =
       providerID === "openai" ||
       providerID === "xai" ||
       providerID === "meta" ||
-      packageName === PACKAGE_BY_PROVIDER.openai ||
-      packageName === PACKAGE_BY_PROVIDER.xai ||
-      packageName === PACKAGE_BY_PROVIDER.meta;
-    if (!candidate) return { kind: "outside-scope" };
-    if (
-      (providerID !== "openai" &&
-        providerID !== "xai" &&
-        providerID !== "meta") ||
-      typeof packageName !== "string" ||
-      packageName !== PACKAGE_BY_PROVIDER[providerID]
-    )
+      isOpencodeProvider;
+    const knownPackage =
+      Object.values(PACKAGE_BY_PROVIDER).some(
+        (value) => value === packageName,
+      ) ||
+      (typeof packageName === "string" &&
+        OPENCODE_FACADE_PACKAGES.has(packageName)) ||
+      packageName === OPENCODE_GENERIC_RESPONSES_PACKAGE;
+    if (!knownProvider && !knownPackage) return { kind: "outside-scope" };
+    if (typeof providerID !== "string" || typeof packageName !== "string")
       return { kind: "unresolved" };
+
+    let route: ResponsesRoute = "native";
+    if (isOpencodeProvider) {
+      if (OPENCODE_FACADE_PACKAGES.has(packageName)) route = "facade";
+      else if (packageName === OPENCODE_GENERIC_RESPONSES_PACKAGE)
+        route = "generic";
+      else return { kind: "unresolved" };
+    } else {
+      const expectedPackage =
+        PACKAGE_BY_PROVIDER[providerID as keyof typeof PACKAGE_BY_PROVIDER];
+      if (expectedPackage === undefined || packageName !== expectedPackage)
+        return { kind: "unresolved" };
+    }
+
     const canonical = ownData(model, "canonical");
     if (canonical !== undefined && canonical !== providerID)
       return { kind: "unresolved" };
@@ -519,7 +757,12 @@ function readIdentity(model: ThinkingModel): Identity {
     const id = ownData(model, "id");
     const effectiveID = modelID ?? id;
     return typeof effectiveID === "string" && effectiveID.length > 0
-      ? { kind: "resolved", provider: providerID, modelID: effectiveID }
+      ? {
+          kind: "resolved",
+          provider: providerID as ResponsesProvider,
+          modelID: effectiveID,
+          route,
+        }
       : { kind: "unresolved" };
   } catch {
     return { kind: "unresolved" };
@@ -531,8 +774,9 @@ type Controls = { effort: unknown; summary: unknown; include: unknown };
 function readControls(
   model: ThinkingModel,
   variant: ThinkingVariant,
-  provider: "openai" | "xai" | "meta",
+  provider: ResponsesProvider,
   modelID: string,
+  route: ResponsesRoute,
 ): Controls | undefined {
   try {
     if (
@@ -549,7 +793,6 @@ function readControls(
       body === undefined
     )
       return undefined;
-
     const defaultInclude = [ENCRYPTED_REASONING];
     const selectedSettings =
       variantSettings.includeEmpty || variantSettings.include !== undefined
@@ -557,11 +800,13 @@ function readControls(
         : modelSettings.includeEmpty || modelSettings.include !== undefined
           ? modelSettings
           : undefined;
+    const facadeDefaults =
+      route === "facade" || (provider === "openai" && route === "native");
     // The OpenAI facade normalizes GPT-5 defaults before applying caller options.
     // This predicate mirrors that native step, not Pi model admission.
     const lowerID = modelID.toLowerCase();
     const gpt5Defaults =
-      provider === "openai" &&
+      facadeDefaults &&
       lowerID.includes("gpt-5") &&
       !lowerID.includes("gpt-5-chat") &&
       !lowerID.includes("gpt-5-pro");
@@ -599,6 +844,35 @@ function readControls(
   } catch {
     return undefined;
   }
+}
+
+function hasDeclaredBaseURL(
+  model: ThinkingModel,
+  variant: ThinkingVariant,
+): boolean {
+  try {
+    return hasDeclaredBaseURLData(model, variant);
+  } catch {
+    return false;
+  }
+}
+
+function hasDeclaredBaseURLData(
+  model: ThinkingModel,
+  variant: ThinkingVariant,
+): boolean {
+  const modelSettings = ownData(model, "settings");
+  const variantSettings = ownData(variant, "settings");
+  if (
+    (modelSettings !== undefined &&
+      (!isRecord(modelSettings) || hasAccessor(modelSettings, "baseURL"))) ||
+    (variantSettings !== undefined &&
+      (!isRecord(variantSettings) || hasAccessor(variantSettings, "baseURL")))
+  )
+    return false;
+  const variantBaseURL = ownData(variantSettings, "baseURL");
+  if (variantBaseURL !== undefined) return typeof variantBaseURL === "string";
+  return typeof ownData(modelSettings, "baseURL") === "string";
 }
 
 type Settings = {

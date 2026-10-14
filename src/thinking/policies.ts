@@ -27,7 +27,8 @@ export type ThinkingIssueCode =
   | "thinking-unsupported"
   | "thinking-pi-level-unsupported"
   | "thinking-identity-unresolved"
-  | "thinking-controls-unproven";
+  | "thinking-controls-unproven"
+  | "thinking-construction-unproven";
 
 // Structural subset of the host's model metadata (Model.Info from @opencode/schema 2.0.21).
 // The catalogue port supplies these objects; this module only reads them.
@@ -183,6 +184,7 @@ export function selectThinkingVariant(
 
   const options: ThinkingOption[] = [];
   let unprovenVariant = false;
+  let constructionUnproven = false;
   let unsupportedRequiredLevel = false;
   for (const variant of model.variants) {
     const selected = selectedProof(model, variant);
@@ -192,6 +194,8 @@ export function selectThinkingVariant(
         selected.unsupportedLevels ?? [],
         requirement,
       );
+      constructionUnproven ||=
+        selected.code === "thinking-construction-unproven";
       unprovenVariant = true;
       continue;
     }
@@ -216,9 +220,11 @@ export function selectThinkingVariant(
       ok: false,
       code: unsupportedRequiredLevel
         ? "thinking-pi-level-unsupported"
-        : unprovenVariant
-          ? "thinking-unmapped"
-          : "thinking-unsupported",
+        : constructionUnproven
+          ? "thinking-construction-unproven"
+          : unprovenVariant
+            ? "thinking-unmapped"
+            : "thinking-unsupported",
     };
   }
   return { ok: true, selection: { kind: "options", options } };
@@ -248,6 +254,13 @@ function selectedProof(
   const admission = admitResponsesVariant(model, variant);
   if (admission.kind === "unresolved") {
     return { ok: false, code: "thinking-identity-unresolved" };
+  }
+  if (admission.kind === "construction-unproven") {
+    return {
+      ok: false,
+      code: "thinking-construction-unproven",
+      unsupportedLevels: admission.unsupportedLevels,
+    };
   }
   if (admission.kind === "unproven-controls") {
     return {

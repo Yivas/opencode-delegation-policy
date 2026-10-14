@@ -874,3 +874,517 @@ test("Meta Responses reads declared identity without getters or credential heade
   assert.deepEqual(item.settings, originalSettings);
   assert.deepEqual(item.body, undefined);
 });
+
+const OPENCODE_GENERIC = "@opencode/ai/providers/openai-compatible-responses";
+const OPENCODE_FACADE_ALIAS = "@opencode/ai/providers/openai/responses";
+const OPENCODE_ROWS = [
+  ["opencode", "gpt-5", ["minimal", "low", "medium", "high"]],
+  ["opencode", "gpt-5-codex", ["low", "medium", "high"]],
+  ["opencode", "gpt-5-nano", ["minimal", "low", "medium", "high"]],
+  ["opencode", "gpt-5.1", ["low", "medium", "high"]],
+  ["opencode", "gpt-5.1-codex", ["low", "medium", "high"]],
+  ["opencode", "gpt-5.1-codex-max", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.1-codex-mini", ["low", "medium", "high"]],
+  ["opencode", "gpt-5.2", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.2-codex", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.3-codex", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.4", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.4-mini", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.4-nano", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.4-pro", ["medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.5", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.5-pro", ["medium", "high", "xhigh"]],
+  ["opencode", "gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"]],
+  ["opencode", "gpt-5.6-sol", ["low", "medium", "high", "xhigh", "max"]],
+  ["opencode", "gpt-5.6-terra", ["low", "medium", "high", "xhigh", "max"]],
+  ["opencode", "gpt-6-astra", ["low", "medium", "high", "xhigh", "max"]],
+  ["opencode", "gpt-6-luna", ["off", "low", "medium", "high", "xhigh", "max"]],
+  ["opencode", "gpt-6-sol", ["off", "low", "medium", "high", "xhigh", "max"]],
+  ["opencode", "grok-4.5", ["low", "medium", "high"]],
+  ["opencode", "grok-4.6", ["low", "medium", "high", "xhigh"]],
+  ["opencode", "grok-build-0.1", ["high"]],
+  ["opencode", "muse-spark-1.2", ["minimal", "low", "medium", "high", "xhigh"]],
+  [
+    "opencode",
+    "muse-spark-1.2-contributor-free",
+    ["minimal", "low", "medium", "high", "xhigh"],
+  ],
+  ["opencode", "muse-spark-1.3", ["minimal", "low", "medium", "high", "xhigh"]],
+  [
+    "opencode",
+    "muse-spark-1.3-contributor-free",
+    ["minimal", "low", "medium", "high", "xhigh"],
+  ],
+  ["opencode-go", "gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"]],
+  ["opencode-go", "grok-4.6", ["low", "medium", "high", "xhigh"]],
+  ["opencode-go", "grok-4.7", ["low", "medium", "high", "xhigh"]],
+  [
+    "opencode-go",
+    "muse-spark-1.2-contributor",
+    ["minimal", "low", "medium", "high", "xhigh"],
+  ],
+  [
+    "opencode-go",
+    "muse-spark-1.3-contributor",
+    ["minimal", "low", "medium", "high", "xhigh"],
+  ],
+];
+const RESPONSES_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+const OPENCODE_OFF_MODELS = new Set(["gpt-6-luna", "gpt-6-sol"]);
+
+function opencodeModel(providerID, modelID, packageName, overrides = {}) {
+  return model({
+    id: modelID,
+    modelID,
+    providerID,
+    canonical: providerID,
+    package: packageName,
+    variants: [],
+    ...overrides,
+  });
+}
+
+function opencodeCandidate(level, packageName) {
+  const baseURL =
+    packageName === OPENCODE_GENERIC ? "declared-but-not-verified" : undefined;
+  if (level === "off") {
+    return variant("off", "none", {
+      settings: {
+        reasoningEffort: "none",
+        include: [],
+        ...(baseURL === undefined ? {} : { baseURL }),
+      },
+    });
+  }
+  return variant(level, level, {
+    settings: {
+      reasoningEffort: level,
+      reasoningSummary: "auto",
+      include: ["reasoning.encrypted_content"],
+      ...(baseURL === undefined ? {} : { baseURL }),
+    },
+  });
+}
+
+test("the exact 34 OpenCode and OpenCode Go source rows admit translated fixed levels and ranges", () => {
+  assert.equal(OPENCODE_ROWS.length, 34);
+  assert.equal(
+    OPENCODE_ROWS.filter(([provider]) => provider === "opencode").length,
+    29,
+  );
+  assert.equal(
+    OPENCODE_ROWS.filter(([provider]) => provider === "opencode-go").length,
+    5,
+  );
+
+  for (const route of [
+    { packageName: "@opencode/ai/providers/openai", name: "OpenAI facade" },
+    { packageName: OPENCODE_FACADE_ALIAS, name: "Responses facade alias" },
+    { packageName: OPENCODE_GENERIC, name: "generic Responses" },
+  ]) {
+    for (const [providerID, id, advertised] of OPENCODE_ROWS) {
+      const modelSettings =
+        route.packageName === OPENCODE_GENERIC
+          ? { baseURL: "declared-but-not-verified" }
+          : undefined;
+      const modelInfo = opencodeModel(providerID, id, route.packageName, {
+        settings: modelSettings,
+      });
+      const source = admitResponsesVariant(modelInfo, {
+        id: "uncontrolled",
+        settings: { temperature: 0.3 },
+      });
+      assert.ok(
+        ["matched", "unproven-controls"].includes(source.kind),
+        `${route.name} ${providerID}/${id}`,
+      );
+      assert.deepEqual(
+        source.advertisedLevels,
+        advertised,
+        `${route.name} ${providerID}/${id} source levels`,
+      );
+
+      for (const level of RESPONSES_LEVELS) {
+        const candidate = opencodeCandidate(level, route.packageName);
+        const result = selected(modelInfo, candidate, {
+          from: level,
+          to: level,
+        });
+        const expected =
+          advertised.includes(level) &&
+          (level !== "off" ||
+            (providerID === "opencode" && OPENCODE_OFF_MODELS.has(id)));
+        assert.equal(
+          result.ok,
+          expected,
+          `${route.name} ${providerID}/${id}:${level}`,
+        );
+        if (expected) {
+          assert.deepEqual(result.selection.compatibleLevels, [level]);
+          assert.deepEqual(result.selection.admittedLevels, [level]);
+          assert.match(
+            result.selection.evidence,
+            /providers\/data\/opencode(-go)?\.json/,
+          );
+          assert.match(
+            result.selection.evidence,
+            new RegExp(`${providerID}/${id}`),
+          );
+        }
+      }
+
+      const variants = advertised.map((level) =>
+        opencodeCandidate(level, route.packageName),
+      );
+      const withVariants = { ...modelInfo, variants };
+      for (let from = 0; from < RESPONSES_LEVELS.length; from += 1) {
+        for (let to = from; to < RESPONSES_LEVELS.length; to += 1) {
+          const range = {
+            from: RESPONSES_LEVELS[from],
+            to: RESPONSES_LEVELS[to],
+          };
+          const result = selectThinkingVariant(withVariants, range, undefined);
+          const expected = advertised
+            .filter((level) => {
+              const position = RESPONSES_LEVELS.indexOf(level);
+              return (
+                position >= from &&
+                position <= to &&
+                (level !== "off" ||
+                  (providerID === "opencode" && OPENCODE_OFF_MODELS.has(id)))
+              );
+            })
+            .map((level) => ({
+              variant: level,
+              compatibleLevels: [level],
+              admittedLevels: [level],
+            }));
+          assert.equal(
+            result.ok,
+            expected.length > 0,
+            `${route.name} ${providerID}/${id}:${range.from}..${range.to}`,
+          );
+          if (expected.length > 0) {
+            assert.equal(result.selection.kind, "options");
+            assert.deepEqual(
+              result.selection.options.map(
+                ({ variant: variantID, compatibleLevels, admittedLevels }) => ({
+                  variant: variantID,
+                  compatibleLevels,
+                  admittedLevels,
+                }),
+              ),
+              expected,
+            );
+          }
+        }
+      }
+    }
+  }
+});
+
+test("declared OpenCode identity uses exact provider and effective model IDs", () => {
+  const highVariant = opencodeCandidate(
+    "high",
+    "@opencode/ai/providers/openai",
+  );
+  assert.equal(
+    selected(
+      opencodeModel("opencode", "gpt-6-luna", "@opencode/ai/providers/openai", {
+        canonical: undefined,
+      }),
+      highVariant,
+      high,
+    ).ok,
+    true,
+  );
+  for (const [providerID, modelID] of [
+    ["opencode", "gpt-6-luna"],
+    ["opencode-go", "gpt-5.6-luna"],
+  ]) {
+    const modelInfo = opencodeModel(
+      providerID,
+      modelID,
+      "@opencode/ai/providers/openai",
+      { id: `alias-${modelID}`, modelID },
+    );
+    assert.equal(selected(modelInfo, highVariant, high).ok, true);
+  }
+  assert.deepEqual(
+    selected(
+      opencodeModel(
+        "opencode-go",
+        "gpt-5.6-luna",
+        "@opencode/ai/providers/openai",
+      ),
+      highVariant,
+      high,
+    ).selection.compatibleLevels,
+    ["high"],
+  );
+  for (const altered of [
+    { providerID: "opencode", canonical: "opencode-go" },
+    { providerID: "opencode-go", canonical: "custom" },
+    { providerID: "unknown-provider" },
+    { package: "@opencode/ai/providers/openai-compatible" },
+    { package: "@opencode/ai/providers/openai-compatible-chat" },
+    { package: "custom/responses" },
+    { modelID: "gpt-6-luna-alias" },
+  ]) {
+    const input = opencodeModel(
+      "opencode",
+      "gpt-6-luna",
+      "@opencode/ai/providers/openai",
+      altered,
+    );
+    assert.deepEqual(selected(input, highVariant, high), {
+      ok: false,
+      code: "thinking-identity-unresolved",
+    });
+  }
+});
+
+test("generic Responses requires declared baseURL and explicit facade-equivalent controls", () => {
+  const effortOnly = { id: "high", settings: { reasoningEffort: "high" } };
+  const generic = opencodeModel("opencode", "gpt-5.6-luna", OPENCODE_GENERIC, {
+    settings: { baseURL: "declared" },
+  });
+  assert.deepEqual(selected(generic, effortOnly, high), {
+    ok: false,
+    code: "thinking-controls-unproven",
+  });
+  const inheritedInclude = variant("high", "high", {
+    settings: {
+      reasoningEffort: "high",
+      reasoningSummary: "auto",
+    },
+  });
+  assert.equal(selected(generic, inheritedInclude, high).ok, true);
+  const explicit = opencodeCandidate("high", OPENCODE_GENERIC);
+  assert.equal(selected(generic, explicit, high).ok, true);
+  const missingSummary = variant("high", "high", {
+    settings: {
+      reasoningEffort: "high",
+      include: ["reasoning.encrypted_content"],
+    },
+  });
+  assert.deepEqual(selected(generic, missingSummary, high), {
+    ok: false,
+    code: "thinking-controls-unproven",
+  });
+  const explicitWithoutURL = variant("high", "high", {
+    settings: {
+      reasoningEffort: "high",
+      reasoningSummary: "auto",
+      include: ["reasoning.encrypted_content"],
+    },
+  });
+
+  for (const settings of [
+    undefined,
+    {},
+    { baseURL: undefined },
+    { baseURL: 42 },
+    { baseURL: null },
+  ]) {
+    const missing = opencodeModel(
+      "opencode",
+      "gpt-5.6-luna",
+      OPENCODE_GENERIC,
+      {
+        settings,
+      },
+    );
+    assert.equal(
+      admitResponsesVariant(missing, explicitWithoutURL).kind,
+      "construction-unproven",
+    );
+    assert.deepEqual(selected(missing, explicitWithoutURL, high), {
+      ok: false,
+      code: "thinking-construction-unproven",
+    });
+  }
+  const overlaidURL = {
+    ...explicit,
+    settings: { ...explicit.settings, baseURL: "variant-declared" },
+  };
+  assert.equal(
+    admitResponsesVariant(
+      opencodeModel("opencode", "gpt-5.6-luna", OPENCODE_GENERIC),
+      overlaidURL,
+    ).kind,
+    "matched",
+  );
+  assert.equal(
+    admitResponsesVariant(generic, {
+      ...overlaidURL,
+      settings: { ...overlaidURL.settings, baseURL: undefined },
+    }).kind,
+    "matched",
+    "undefined in a variant overlay preserves the model's declared baseURL",
+  );
+  const accessor = {};
+  let baseURLReads = 0;
+  Object.defineProperty(accessor, "baseURL", {
+    get() {
+      baseURLReads += 1;
+      throw new Error("must not run");
+    },
+  });
+  const accessorModel = opencodeModel(
+    "opencode",
+    "gpt-5.6-luna",
+    OPENCODE_GENERIC,
+    {
+      settings: accessor,
+    },
+  );
+  assert.equal(
+    admitResponsesVariant(accessorModel, explicitWithoutURL).kind,
+    "construction-unproven",
+  );
+  assert.equal(baseURLReads, 0);
+
+  const missingVariantURL = {
+    ...generic,
+    settings: undefined,
+  };
+  assert.equal(
+    admitResponsesVariant(missingVariantURL, explicitWithoutURL).kind,
+    "construction-unproven",
+  );
+  const variantURLAccessor = {};
+  let variantURLReads = 0;
+  Object.defineProperty(variantURLAccessor, "baseURL", {
+    get() {
+      variantURLReads += 1;
+      throw new Error("must not run");
+    },
+  });
+  assert.equal(
+    admitResponsesVariant(generic, {
+      ...explicitWithoutURL,
+      settings: variantURLAccessor,
+    }).kind,
+    "construction-unproven",
+  );
+  assert.equal(variantURLReads, 0);
+});
+
+test("malformed proxies fail with fixed unresolved results without coercion", () => {
+  const highVariant = opencodeCandidate(
+    "high",
+    "@opencode/ai/providers/openai",
+  );
+  const revoked = Proxy.revocable({}, {});
+  revoked.revoke();
+  assert.deepEqual(admitResponsesVariant(revoked.proxy, highVariant), {
+    kind: "unresolved",
+  });
+
+  let packageCoercions = 0;
+  const malformedPackage = {
+    ...opencodeModel("opencode", "gpt-6-luna", "@opencode/ai/providers/openai"),
+    package: {
+      toString() {
+        packageCoercions += 1;
+        throw new Error("must not run");
+      },
+    },
+  };
+  assert.deepEqual(admitResponsesVariant(malformedPackage, highVariant), {
+    kind: "unresolved",
+  });
+  assert.equal(packageCoercions, 0);
+
+  const throwingProxy = new Proxy(
+    opencodeModel("opencode", "gpt-6-luna", "@opencode/ai/providers/openai"),
+    {
+      getOwnPropertyDescriptor() {
+        throw new Error("raw trap detail");
+      },
+    },
+  );
+  assert.deepEqual(admitResponsesVariant(throwingProxy, highVariant), {
+    kind: "unresolved",
+  });
+});
+
+test("facade identity controls defaults, off recipes, and known factory routes", () => {
+  const gpt56 = opencodeModel(
+    "opencode",
+    "gpt-5.6-luna",
+    "@opencode/ai/providers/openai",
+  );
+  const effortOnly = { id: "high", settings: { reasoningEffort: "high" } };
+  assert.equal(selected(gpt56, effortOnly, high).ok, true);
+  const aliasModel = opencodeModel(
+    "opencode",
+    "gpt-5.6-luna",
+    OPENCODE_FACADE_ALIAS,
+  );
+  assert.equal(selected(aliasModel, effortOnly, high).ok, true);
+  const pro = opencodeModel(
+    "opencode",
+    "gpt-5.4-pro",
+    "@opencode/ai/providers/openai",
+  );
+  assert.equal(selected(pro, effortOnly, high).ok, true);
+
+  for (const id of ["gpt-6-luna", "gpt-6-sol"]) {
+    const off = opencodeCandidate("off", "@opencode/ai/providers/openai");
+    assert.equal(
+      selected(
+        opencodeModel("opencode", id, "@opencode/ai/providers/openai"),
+        off,
+        { from: "off", to: "off" },
+      ).ok,
+      true,
+    );
+  }
+  for (const id of ["gpt-6-luna", "gpt-6-sol"]) {
+    const genericModel = opencodeModel("opencode", id, OPENCODE_GENERIC, {
+      settings: { baseURL: "declared" },
+    });
+    const genericOff = opencodeCandidate("off", OPENCODE_GENERIC);
+    assert.deepEqual(
+      selected(genericModel, genericOff, { from: "off", to: "off" }).ok,
+      true,
+    );
+    assert.deepEqual(
+      selected(genericModel, variant("off-default-include", "none"), {
+        from: "off",
+        to: "off",
+      }),
+      { ok: false, code: "thinking-controls-unproven" },
+    );
+    const bodyIncludeEmpty = {
+      ...genericOff,
+      body: { include: [] },
+    };
+    assert.deepEqual(
+      selected(genericModel, bodyIncludeEmpty, { from: "off", to: "off" }),
+      { ok: false, code: "thinking-controls-unproven" },
+    );
+  }
+
+  for (const packageName of [
+    "@opencode/ai/providers/openai-compatible",
+    "@opencode/ai/providers/openai-compatible-chat",
+    "@opencode/ai/providers/openai-compatible-responses/chat",
+  ]) {
+    const unsupported = opencodeModel("opencode", "gpt-6-luna", packageName);
+    assert.deepEqual(selected(unsupported, effortOnly, high), {
+      ok: false,
+      code: "thinking-identity-unresolved",
+    });
+  }
+});
