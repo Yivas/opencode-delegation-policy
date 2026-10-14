@@ -103,14 +103,20 @@ restoring the scoped Pi budget or omitting inherited fields for `off` without ch
 It requires an injected authority for the exact child, parent, role, model, variant, registration
 lifetime and body-independent authentication. It preserves request options and rejects stale bindings
 or concurrent request changes. There is no production ownership authority or hook registration yet.
-Its factory requires an explicit `maxBytes`/`timeoutMs` read policy, with no production defaults.
+Its factory requires a `maxBytes`/`timeoutMs` read policy and a separate third `waitPolicy` argument
+with `timeoutMs`; neither has production defaults. The cooperative wait deadline starts at hook
+entry and covers both ownership classifications and body reading together. Timeout or abort retires
+that invocation, stops its cloned reader and prevents the module's own late rewrite. Callback errors
+remain opaque, including lookalikes of internal timeout errors.
+
 The cloned body is collected incrementally, counted using intrinsic byte lengths and cancelled on
-read failure without consuming the original. The deadline covers reading only, not ownership checks
-or synchronous parsing/serialization. Clone tee, source chunks, parsed JSON and rebuilt bodies can
-still increase memory use, and later hooks can rewrite the result. HTTP callbacks can access
-authentication headers; this is not a credential-isolated boundary. Restoring Pi's budget while
-keeping the total output cap can leave less answer room. Local request fixtures prove the component
-at its callback position, not whole-callback timing, final-wire controls or provider acceptance.
+read failure without consuming or aborting the original. The deadline cannot preempt synchronous
+CPU work or cancel an external classifier or its own effects. Clone tee, source chunks, parsed JSON
+and rebuilt bodies can still increase memory use, and later hooks can rewrite the result. HTTP
+callbacks can access authentication headers; this is not a credential-isolated boundary. Restoring
+Pi's budget while keeping the total output cap can leave less answer room. Local fixtures verify
+these callback-position controls, not strict whole-function timing, final-wire controls or provider
+acceptance.
 
 Bedrock has a separate pure planner for all 47 exact adaptive Claude catalogue entries in Pi AI
 `0.87.1`. It resolves `xhigh` and `off` support per row, keeps compatible and admitted levels separate,

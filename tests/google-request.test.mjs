@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  createGoogleOwnedRequestHook,
+  createGoogleOwnedRequestHook as createGoogleOwnedRequestHookImpl,
   GoogleOwnedRequestError,
 } from "../dist/thinking/google-request.js";
 
@@ -25,6 +25,21 @@ const PRO_MODEL = {
 };
 // Test-only read limits, passed explicitly to every hook. They are not a production default.
 const TEST_READ_POLICY = Object.freeze({ maxBytes: 1 << 20, timeoutMs: 5000 });
+const TEST_WAIT_POLICY = Object.freeze({ timeoutMs: 5000 });
+
+function createGoogleOwnedRequestHook(...args) {
+  if (args.length === 1) {
+    return createGoogleOwnedRequestHookImpl(
+      args[0],
+      TEST_READ_POLICY,
+      TEST_WAIT_POLICY,
+    );
+  }
+  if (args.length === 2) {
+    return createGoogleOwnedRequestHookImpl(args[0], args[1], TEST_WAIT_POLICY);
+  }
+  return createGoogleOwnedRequestHookImpl(...args);
+}
 
 const BINDING = {
   registrationToken: "token-1",
@@ -624,8 +639,427 @@ test("a binding whose token changes while the body is read is a mismatch, and no
 
 test("creating the hook registers nothing and classifies nothing", () => {
   const ownership = ownershipOf(owned(BINDING));
-  createGoogleOwnedRequestHook(ownership, TEST_READ_POLICY);
+  createGoogleOwnedRequestHook(ownership, TEST_READ_POLICY, TEST_WAIT_POLICY);
   assert.equal(ownership.counters.classify, 0);
+});
+
+test("the explicit wait policy is validated and captured without invoking getters", async () => {
+  let reads = 0;
+  const accessor = { timeoutMs: 10 };
+  Object.defineProperty(accessor, "timeoutMs", {
+    get() {
+      reads += 1;
+      return 10;
+    },
+  });
+  const invalid = [
+    null,
+    [],
+    {},
+    { timeoutMs: 0 },
+    { timeoutMs: -1 },
+    { timeoutMs: 1.5 },
+    { timeoutMs: Number.NaN },
+    { timeoutMs: 2147483648 },
+    Object.create({ timeoutMs: 10 }),
+    accessor,
+  ];
+  assert.throws(
+    () =>
+      createGoogleOwnedRequestHookImpl(ownershipOf(UNOWNED), TEST_READ_POLICY),
+    (error) => error.code === "wait-policy-invalid",
+  );
+  for (const waitPolicy of invalid) {
+    assert.throws(
+      () =>
+        createGoogleOwnedRequestHook(
+          ownershipOf(UNOWNED),
+          TEST_READ_POLICY,
+          waitPolicy,
+        ),
+      (error) => error.code === "wait-policy-invalid",
+    );
+  }
+  assert.equal(reads, 0);
+
+  const waitPolicy = { timeoutMs: 100 };
+  const hook = createGoogleOwnedRequestHook(
+    ownershipOf(UNOWNED),
+    TEST_READ_POLICY,
+    waitPolicy,
+  );
+  waitPolicy.timeoutMs = 1;
+  const request = requestFor("not-json");
+  await hook(eventFor(request));
+  assert.equal(request.bodyUsed, false);
+});
+
+test("the wait timer uses only the deadline remaining after setup", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  let scheduledDelay;
+  let expire;
+  t.mock.method(globalThis, "setTimeout", (callback, delay) => {
+    expire = callback;
+    scheduledDelay = delay;
+    return 1;
+  });
+  t.mock.method(globalThis, "clearTimeout", () => {});
+
+  const request = requestFor(packet({}));
+  const signal = request.signal;
+  Object.defineProperty(request, "signal", {
+    get() {
+      now = 5;
+      return signal;
+    },
+  });
+  const event = eventFor(request);
+  let classifyCalls = 0;
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: () => {
+        classifyCalls += 1;
+        return new Promise(() => {});
+      },
+      isCurrent: () => true,
+    },
+    TEST_READ_POLICY,
+    { timeoutMs: 10 },
+  );
+  const running = hook(event);
+
+  assert.equal(scheduledDelay, 5);
+  assert.equal(classifyCalls, 1);
+  now = 10;
+  expire();
+  await rejectsWith(running, "wait-timeout");
+  assert.equal(event.request, request);
+
+  now = 0;
+  scheduledDelay = undefined;
+  const expiredRequest = requestFor(packet({}));
+  const expiredSignal = expiredRequest.signal;
+  Object.defineProperty(expiredRequest, "signal", {
+    get() {
+      now = 11;
+      return expiredSignal;
+    },
+  });
+  const expiredEvent = eventFor(expiredRequest);
+  const expiredHeaders = [...expiredRequest.headers.entries()];
+  const alreadyExpired = hook(expiredEvent);
+  assert.equal(scheduledDelay, undefined);
+  await rejectsWith(alreadyExpired, "wait-timeout");
+  assert.equal(classifyCalls, 1);
+  assert.equal(expiredEvent.request, expiredRequest);
+  assert.equal(expiredRequest.bodyUsed, false);
+  assert.deepEqual([...expiredRequest.headers.entries()], expiredHeaders);
+  assert.deepEqual(await bodyOf(expiredRequest), packet({}));
+});
+
+test("an already-aborted request skips ownership classification", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const request = requestFor(packet({}), { signal: controller.signal });
+  const clones = countClones(request);
+  const headers = [...request.headers.entries()];
+  const event = eventFor(request);
+  let classifyCalls = 0;
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: () => {
+        classifyCalls += 1;
+        return UNOWNED;
+      },
+      isCurrent: () => true,
+    },
+    TEST_READ_POLICY,
+    TEST_WAIT_POLICY,
+  );
+
+  await rejectsWith(hook(event), "wait-aborted");
+  assert.equal(classifyCalls, 0);
+  assert.equal(clones.calls, 0);
+  assert.equal(event.request, request);
+  assert.equal(request.bodyUsed, false);
+  assert.deepEqual([...request.headers.entries()], headers);
+  assert.deepEqual(await bodyOf(request), packet({}));
+});
+
+test("an expired binding snapshot skips the ownership lifetime callback", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const request = requestFor(packet({}));
+  const headers = [...request.headers.entries()];
+  const event = eventFor(request);
+  let currentCalls = 0;
+  const binding = { ...BINDING };
+  Object.defineProperty(binding, "registrationToken", {
+    get() {
+      now = 11;
+      return BINDING.registrationToken;
+    },
+  });
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: () => owned(binding),
+      isCurrent: () => {
+        currentCalls += 1;
+        return true;
+      },
+    },
+    TEST_READ_POLICY,
+    { timeoutMs: 10 },
+  );
+
+  await rejectsWith(hook(event), "wait-timeout");
+  assert.equal(currentCalls, 0);
+  assert.equal(event.request, request);
+  assert.equal(request.bodyUsed, false);
+  assert.deepEqual([...request.headers.entries()], headers);
+  assert.deepEqual(await bodyOf(request), packet({}));
+});
+
+test("fractional remaining time is rounded up when scheduling the wait deadline", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  let scheduledDelay;
+  t.mock.method(globalThis, "setTimeout", (_callback, delay) => {
+    scheduledDelay = delay;
+    return 1;
+  });
+  t.mock.method(globalThis, "clearTimeout", () => {});
+
+  const request = requestFor(packet({}));
+  const signal = request.signal;
+  Object.defineProperty(request, "signal", {
+    get() {
+      now = 5.5;
+      return signal;
+    },
+  });
+  const event = eventFor(request);
+  let classifyCalls = 0;
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: () => {
+        classifyCalls += 1;
+        return UNOWNED;
+      },
+      isCurrent: () => true,
+    },
+    TEST_READ_POLICY,
+    { timeoutMs: 10 },
+  );
+
+  await hook(event);
+  assert.equal(classifyCalls, 1);
+  assert.equal(scheduledDelay, 5);
+  assert.equal(event.request, request);
+  assert.equal(request.bodyUsed, false);
+});
+
+test("a never-settling first classification is retired before any body read", async () => {
+  const request = requestFor(packet({}));
+  const clones = countClones(request);
+  const event = eventFor(request);
+  const hook = createGoogleOwnedRequestHook(
+    { classify: () => new Promise(() => {}), isCurrent: () => true },
+    TEST_READ_POLICY,
+    { timeoutMs: 20 },
+  );
+  await rejectsWith(hook(event), "wait-timeout");
+  assert.equal(clones.calls, 0);
+  assert.equal(event.request, request);
+});
+
+test("a never-settling second classification is retired without assigning a request", async () => {
+  let calls = 0;
+  const request = requestFor(packet({ maxOutputTokens: 40000 }));
+  const event = eventFor(request);
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: () => {
+        calls += 1;
+        return calls === 1 ? owned(BINDING) : new Promise(() => {});
+      },
+      isCurrent: () => true,
+    },
+    TEST_READ_POLICY,
+    { timeoutMs: 30 },
+  );
+  await rejectsWith(hook(event), "wait-timeout");
+  assert.equal(calls, 2);
+  assert.equal(event.request, request);
+});
+
+test("the whole-hook timeout stops a pending body read without replacing the caller signal", async () => {
+  let cancelCalls = 0;
+  const request = streamingRequest(
+    lazyStream({
+      cancel: () => {
+        cancelCalls += 1;
+      },
+    }),
+  );
+  const event = eventFor(request);
+  const hook = createGoogleOwnedRequestHook(
+    ownershipOf(owned(BINDING)),
+    { maxBytes: 1024, timeoutMs: 5000 },
+    { timeoutMs: 20 },
+  );
+  await rejectsWith(hook(event), "wait-timeout");
+  await sleep(0);
+  assert.equal(cancelCalls, 1);
+  assert.equal(event.request, request);
+  assert.equal(request.signal.aborted, false);
+});
+
+test("one invocation timing out does not retire a parallel invocation using the same hook", async () => {
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: (event) =>
+        event.sessionID === "slow" ? new Promise(() => {}) : UNOWNED,
+      isCurrent: () => true,
+    },
+    TEST_READ_POLICY,
+    { timeoutMs: 20 },
+  );
+  const slowRequest = requestFor(packet({}));
+  const fastRequest = requestFor("not-json");
+  const slowEvent = eventFor(slowRequest, { sessionID: "slow" });
+  const fastEvent = eventFor(fastRequest, { sessionID: "fast" });
+
+  const slow = rejectsWith(hook(slowEvent), "wait-timeout");
+  await hook(fastEvent);
+  await slow;
+  assert.equal(slowEvent.request, slowRequest);
+  assert.equal(fastEvent.request, fastRequest);
+});
+
+test("the hook shares one deadline across classification and reading", async () => {
+  let calls = 0;
+  const request = requestFor(packet({ maxOutputTokens: 40000 }));
+  const event = eventFor(request);
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: async () => {
+        calls += 1;
+        if (calls === 1) await sleep(25);
+        if (calls === 2) await sleep(25);
+        return owned(BINDING);
+      },
+      isCurrent: () => true,
+    },
+    TEST_READ_POLICY,
+    { timeoutMs: 40 },
+  );
+  await rejectsWith(hook(event), "wait-timeout");
+  assert.equal(calls, 2);
+  assert.equal(event.request, request);
+});
+
+test("abort during either ownership wait retires the invocation", async () => {
+  for (const abortAt of [1, 2]) {
+    const controller = new AbortController();
+    const request = requestFor(packet({}), { signal: controller.signal });
+    const event = eventFor(request);
+    let calls = 0;
+    const hook = createGoogleOwnedRequestHook(
+      {
+        classify: () => {
+          calls += 1;
+          if (calls === abortAt) {
+            setImmediate(() => controller.abort());
+            return new Promise(() => {});
+          }
+          return owned(BINDING);
+        },
+        isCurrent: () => true,
+      },
+      TEST_READ_POLICY,
+      { timeoutMs: 1000 },
+    );
+    await rejectsWith(hook(event), "wait-aborted");
+    assert.equal(calls, abortAt);
+    assert.equal(event.request, request);
+  }
+});
+
+test("late classification resolution or rejection after timeout cannot write or become unhandled", async () => {
+  const unhandled = [];
+  const listener = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", listener);
+  try {
+    for (const rejectLate of [false, true]) {
+      let settle;
+      const request = requestFor(packet({}));
+      const event = eventFor(request);
+      const hook = createGoogleOwnedRequestHook(
+        {
+          classify: () =>
+            new Promise((resolve, reject) => {
+              settle = rejectLate ? reject : resolve;
+            }),
+          isCurrent: () => true,
+        },
+        TEST_READ_POLICY,
+        { timeoutMs: 10 },
+      );
+      await rejectsWith(hook(event), "wait-timeout");
+      if (rejectLate) settle(new Error(SYNTHETIC));
+      else settle(owned(BINDING));
+      await sleep(10);
+      assert.equal(event.request, request);
+    }
+    assert.equal(unhandled.length, 0);
+  } finally {
+    process.off("unhandledRejection", listener);
+  }
+});
+
+test("a replaced request remains current when classification times out", async () => {
+  let settle;
+  const request = requestFor(packet({}));
+  const replacement = requestFor(packet({ maxOutputTokens: 1234 }));
+  const event = eventFor(request);
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+      isCurrent: () => true,
+    },
+    TEST_READ_POLICY,
+    { timeoutMs: 10 },
+  );
+  await rejectsWith(hook(event), "wait-timeout");
+  event.request = replacement;
+  settle(owned(BINDING));
+  await sleep(10);
+  assert.equal(event.request, replacement);
+});
+
+test("a synchronous classifier that advances past the deadline cannot proceed to body access", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
+  const request = requestFor(packet({}));
+  const clones = countClones(request);
+  const hook = createGoogleOwnedRequestHook(
+    {
+      classify: () => {
+        now = 11;
+        return owned(BINDING);
+      },
+      isCurrent: () => true,
+    },
+    TEST_READ_POLICY,
+    { timeoutMs: 10 },
+  );
+  await rejectsWith(hook(eventFor(request)), "wait-timeout");
+  assert.equal(clones.calls, 0);
 });
 
 test("a thrown owned error stops the trigger, so the request handler is never reached", async () => {
@@ -829,6 +1263,55 @@ test("a classify that throws or rejects with a raw secret fails with an opaque o
     );
     assert.equal(clones.calls, 0);
     assert.equal(event.request, request);
+  }
+});
+
+test("async classifier rejections cannot impersonate this or a prior hook retirement", async () => {
+  let priorHookError;
+  const priorRequest = requestFor(packet({}));
+  await assert.rejects(
+    createGoogleOwnedRequestHook(
+      { classify: () => new Promise(() => {}), isCurrent: () => true },
+      TEST_READ_POLICY,
+      { timeoutMs: 5 },
+    )(eventFor(priorRequest)),
+    (error) => {
+      priorHookError = error;
+      assert.ok(error instanceof GoogleOwnedRequestError);
+      assert.equal(error.code, "wait-timeout");
+      return true;
+    },
+  );
+
+  const rejections = [
+    undefined,
+    null,
+    false,
+    0,
+    "",
+    SYNTHETIC,
+    { secret: SYNTHETIC },
+    new Error(SYNTHETIC),
+    new GoogleOwnedRequestError("wait-timeout"),
+    priorHookError,
+  ];
+  for (const rejection of rejections) {
+    const request = requestFor(packet({}));
+    const clones = countClones(request);
+    const event = eventFor(request);
+    await assertOpaqueOwnershipFailure(
+      createGoogleOwnedRequestHook(
+        {
+          classify: async () => Promise.reject(rejection),
+          isCurrent: () => true,
+        },
+        TEST_READ_POLICY,
+        TEST_WAIT_POLICY,
+      )(event),
+    );
+    assert.equal(clones.calls, 0);
+    assert.equal(event.request, request);
+    assert.deepEqual(await bodyOf(request), packet({}));
   }
 });
 
@@ -1451,7 +1934,7 @@ test("an original already aborted is refused before any clone or read", async ()
   const request = requestFor(JSON_BODY, { signal: controller.signal });
   const clones = countClones(request);
   const event = eventFor(request);
-  await rejectsWith(policyHook(TEST_READ_POLICY)(event), "read-aborted");
+  await rejectsWith(policyHook(TEST_READ_POLICY)(event), "wait-aborted");
   assert.equal(clones.calls, 0);
   assert.equal(event.request, request);
 });
@@ -1621,9 +2104,12 @@ test("the deadline timer and request signal listener are released on success, re
   const realSetTimeout = globalThis.setTimeout;
   const realClearTimeout = globalThis.clearTimeout;
   let failTimer = false;
+  let timersBeforeFailure = 0;
   let failClear = false;
   t.mock.method(globalThis, "setTimeout", (...args) => {
-    if (failTimer) {
+    if (failTimer && timersBeforeFailure > 0) {
+      timersBeforeFailure -= 1;
+    } else if (failTimer) {
       failTimer = false;
       throw new Error(SYNTHETIC);
     }
@@ -1734,6 +2220,7 @@ test("the deadline timer and request signal listener are released on success, re
       },
       before: () => {
         failTimer = true;
+        timersBeforeFailure = 1;
       },
     },
     {
@@ -1827,7 +2314,7 @@ test("the deadline timer and request signal listener are released on success, re
         pendingAbortListeners.add(listener);
       }
       const result = addListener(type, listener, options);
-      if (scenario.throwAfterAdd && type === "abort") {
+      if (scenario.throwAfterAdd && type === "abort" && addCalls === 2) {
         throw new Error(SYNTHETIC);
       }
       return result;
@@ -1839,7 +2326,7 @@ test("the deadline timer and request signal listener are released on success, re
         pendingAbortListeners.delete(listener);
       }
       const result = removeListener(type, listener, options);
-      if (scenario.throwOnRemove && type === "abort") {
+      if (scenario.throwOnRemove && type === "abort" && removeCalls === 2) {
         throw new Error(SYNTHETIC);
       }
       return result;
@@ -1866,34 +2353,40 @@ test("the deadline timer and request signal listener are released on success, re
       );
     }
     if (scenario.name === "timer setup failure") {
-      assert.equal(created.length, createdBefore);
+      assert.equal(ours.length, 1, "only the hook deadline timer was created");
       assert.equal(timerSetupBody.locked, false);
     }
     if (scenario.name === "listener setup failure after registration") {
       assert.equal(partialSetupBody.locked, false);
     }
     const expectedListenerCalls =
-      scenario.name === "timer setup failure"
-        ? 0
-        : scenario.name === "success"
+      scenario.name === "success"
+        ? 4
+        : scenario.name === "abort" || scenario.name === "timer setup failure"
           ? 2
-          : 1;
+          : scenario.name === "timer setup failure" ||
+              scenario.name === "oversize" ||
+              scenario.name === "deadline" ||
+              scenario.name === "reader failure" ||
+              scenario.name === "listener setup failure after registration" ||
+              scenario.name === "listener cleanup failure" ||
+              scenario.name === "timer cleanup failure"
+            ? 3
+            : 0;
     assert.equal(
       addCalls,
       expectedListenerCalls,
       `${scenario.name} added listeners`,
     );
-    if (scenario.name === "timer setup failure") {
-      assert.equal(removeCalls, 0);
-    } else {
-      assert.equal(
-        removeCalls,
-        1,
-        `${scenario.name} removed its hook listener`,
-      );
-      assert.equal(removedAbortListeners.size, 1);
+    const expectedListenerRemovals = scenario.name === "success" ? 3 : addCalls;
+    assert.equal(
+      removeCalls,
+      expectedListenerRemovals,
+      `${scenario.name} removed hook and reader listeners`,
+    );
+    for (const listener of removedAbortListeners) {
       assert.ok(
-        addedAbortListeners.includes([...removedAbortListeners][0]),
+        addedAbortListeners.includes(listener),
         `${scenario.name} removed a listener it registered`,
       );
     }

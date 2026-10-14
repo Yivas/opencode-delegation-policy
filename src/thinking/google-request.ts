@@ -24,10 +24,11 @@ import type { ThinkingLevel } from "./policies.js";
 // a level, never replaces a variant and never reapplies or raises the output cap.
 //
 // The body is read through an explicit read policy supplied by the caller. It has no default. The policy bounds the
-// bytes collected from the cloned body and the time that collection may take. This is not a total memory bound: the
-// request tee and original branch, stream internals, parsed JSON and rebuilt body can retain additional data. The
-// deadline and abort listener cover the read phase only: the classification port is awaited without a bound, and the
-// synchronous JSON parse, serialization and event-loop time are not covered by any wall-clock guarantee.
+// bytes collected from the cloned body and the time that collection may take. A separate explicit wait policy starts
+// at hook entry and bounds cooperative waits for ownership classification and body reading together. Expiring it
+// retires this invocation and stops its cloned reader; it cannot cancel an ownership callback or preempt synchronous
+// CPU work. This is not a total memory bound: the request tee and original branch, stream internals, parsed JSON and
+// rebuilt body can retain additional data.
 
 export type GoogleRequestErrorCode =
   | "ownership-failed"
@@ -42,6 +43,10 @@ export type GoogleRequestErrorCode =
   | "body-too-large"
   | "read-timeout"
   | "read-aborted"
+  | "wait-policy-invalid"
+  | "wait-timeout"
+  | "wait-aborted"
+  | "wait-failed"
   | "read-failed"
   | "parse-failed"
   | "request-changed"
@@ -65,6 +70,11 @@ const MESSAGES: Readonly<Record<GoogleRequestErrorCode, string>> =
     "body-too-large": "owned Google request body exceeds the read limit",
     "read-timeout": "owned Google request body read exceeded its deadline",
     "read-aborted": "owned Google request was aborted before its body was read",
+    "wait-policy-invalid":
+      "owned Google request wait policy is not a valid bound",
+    "wait-timeout": "owned Google request exceeded its total wait deadline",
+    "wait-aborted": "owned Google request was aborted while waiting",
+    "wait-failed": "owned Google request wait could not be bounded",
     "read-failed": "owned Google request body could not be read",
     "parse-failed": "owned Google request body is not valid JSON",
     "request-changed":
@@ -124,6 +134,11 @@ export type GoogleOwnedRequestHook = (
   event: SessionHttpRequest,
 ) => Promise<void>;
 
+// The explicit bound for the complete cooperative wait. A caller supplies it; there is no production default.
+export type GoogleRequestWaitPolicy = {
+  readonly timeoutMs: number;
+};
+
 // The explicit bound for the body read. A caller supplies it; the module provides no default.
 export type GoogleRequestReadPolicy = {
   readonly maxBytes: number;
@@ -135,6 +150,19 @@ type GoogleRequestReadBounds = {
   readonly timeoutMs: number;
 };
 
+type GoogleRequestWaitBounds = { readonly timeoutMs: number };
+type GoogleRequestWait = {
+  readonly signal: AbortSignal;
+  readonly initialRequest: Request;
+  readonly initialSignal: AbortSignal;
+  isInterruption(error: unknown): boolean;
+  run<T>(operation: PromiseLike<T> | T): Promise<T>;
+  pauseOriginalAbort(): void;
+  resumeOriginalAbort(): void;
+  check(): void;
+  cleanup(): void;
+};
+
 // Node clamps larger timer delays, so a longer deadline would fire at once.
 const MAX_TIMER_DELAY_MS = 2147483647;
 const UNREADABLE = Symbol("unreadable");
@@ -143,53 +171,83 @@ const UNREADABLE = Symbol("unreadable");
 export function createGoogleOwnedRequestHook(
   ownership: GoogleRequestOwnership,
   readPolicy: GoogleRequestReadPolicy,
+  waitPolicy: GoogleRequestWaitPolicy,
 ): GoogleOwnedRequestHook {
   const readBounds = readBoundsOf(readPolicy);
+  const waitBounds = waitBoundsOf(waitPolicy);
   return async (event) => {
-    const first = await classifyOwnership(ownership, event);
-    if (first === undefined) {
-      // Foreign, inline and unknown requests keep their identity, and their body is not read.
-      return;
-    }
-    const control = controlFor(event, first, ownership);
+    const wait = createRequestWait(event, waitBounds);
+    try {
+      const first = await classifyOwnership(ownership, event, wait);
+      if (first === undefined) {
+        wait.check();
+        return;
+      }
+      const control = controlFor(event, first, ownership, wait);
+      wait.check();
 
-    const original = event.request;
-    const headersBefore = headerEntries(original);
-    if (original.headers.has("content-length")) {
-      throw fail("stale-content-length");
-    }
-    if (
-      original.method !== "POST" ||
-      !isJsonContentType(original.headers.get("content-type"))
-    ) {
-      throw fail("shape-rejected");
-    }
+      const original = wait.initialRequest;
+      const headersBefore = headerEntries(original);
+      if (original.headers.has("content-length")) {
+        throw fail("stale-content-length");
+      }
+      if (
+        original.method !== "POST" ||
+        !isJsonContentType(original.headers.get("content-type"))
+      ) {
+        throw fail("shape-rejected");
+      }
+      if (event.request !== original) {
+        throw fail("request-changed");
+      }
+      wait.check();
 
-    const parsed = parsePacket(await readBoundedText(original, readBounds));
-    const next = withThinkingConfig(parsed, control);
+      wait.pauseOriginalAbort();
+      let body: string;
+      try {
+        body = await wait.run(
+          readBoundedText(original, readBounds, wait.signal),
+        );
+      } finally {
+        wait.resumeOriginalAbort();
+      }
+      if (wait.initialSignal.aborted) throw fail("read-aborted");
+      const parsed = parsePacket(body);
+      wait.check();
+      const next = withThinkingConfig(parsed, control);
+      wait.check();
 
-    // The ownership, the lifetime, the request object and the headers are checked again after the await, and before
-    // the synchronous assignment. A change in any of them rejects the write instead of restoring older state.
-    const second = await classifyOwnership(ownership, event);
-    if (second === undefined) {
-      throw fail("binding-stale");
-    }
-    if (!isDeepStrictEqual(second, first)) {
-      throw fail("binding-mismatch");
-    }
-    controlFor(event, second, ownership);
-    if (
-      event.request !== original ||
-      !isDeepStrictEqual(headerEntries(original), headersBefore)
-    ) {
-      throw fail("request-changed");
-    }
+      const second = await classifyOwnership(ownership, event, wait);
+      if (second === undefined) {
+        throw fail("binding-stale");
+      }
+      if (!isDeepStrictEqual(second, first)) {
+        throw fail("binding-mismatch");
+      }
+      controlFor(event, second, ownership, wait);
+      wait.check();
+      if (
+        event.request !== original ||
+        !isDeepStrictEqual(headerEntries(original), headersBefore)
+      ) {
+        throw fail("request-changed");
+      }
 
-    // A packet that already carries the planned subtree keeps its request object, so repetition is an identity no-op.
-    if (isDeepStrictEqual(parsed, next)) {
-      return;
+      if (isDeepStrictEqual(parsed, next)) {
+        wait.check();
+        return;
+      }
+      const rebuilt = rebuildRequest(original, next);
+      wait.cleanup();
+      wait.check();
+      if (wait.initialSignal.aborted) throw fail("read-aborted");
+      if (event.request !== original) {
+        throw fail("request-changed");
+      }
+      event.request = rebuilt;
+    } finally {
+      wait.cleanup();
     }
-    event.request = rebuildRequest(original, next);
   };
 }
 
@@ -211,13 +269,28 @@ function readerError(code: GoogleRequestErrorCode): GoogleOwnedRequestError {
 async function classifyOwnership(
   ownership: GoogleRequestOwnership,
   event: SessionHttpRequest,
+  wait: GoogleRequestWait,
 ): Promise<GoogleOwnedBinding | undefined> {
-  let classification: GoogleRequestClassification;
+  let result:
+    | GoogleRequestClassification
+    | Promise<GoogleRequestClassification>;
+  wait.check();
   try {
-    classification = await ownership.classify(event);
+    result = ownership.classify(event);
   } catch {
+    wait.check();
     throw fail("ownership-failed");
   }
+  let classification: GoogleRequestClassification;
+  try {
+    classification = await wait.run(result);
+  } catch (error) {
+    if (wait.isInterruption(error)) {
+      throw error;
+    }
+    throw fail("ownership-failed");
+  }
+  wait.check();
   return ownedBindingOf(classification);
 }
 
@@ -282,6 +355,7 @@ function controlFor(
   event: SessionHttpRequest,
   binding: GoogleOwnedBinding,
   ownership: GoogleRequestOwnership,
+  wait: GoogleRequestWait,
 ): GoogleControl {
   if (
     binding.registrationToken === "" ||
@@ -314,6 +388,7 @@ function controlFor(
   if (plan.kind === "incompatible") {
     throw fail("binding-unsupported");
   }
+  wait.check();
   if (!lifetimeIsCurrent(ownership, binding)) {
     throw fail("binding-stale");
   }
@@ -340,6 +415,160 @@ function isJsonContentType(value: string | null): boolean {
 
 function headerEntries(request: Request): Array<[string, string]> {
   return [...request.headers.entries()];
+}
+
+function waitBoundsOf(policy: unknown): GoogleRequestWaitBounds {
+  let isArray: boolean;
+  try {
+    isArray = Array.isArray(policy);
+  } catch {
+    throw fail("wait-policy-invalid");
+  }
+  if (typeof policy !== "object" || policy === null || isArray) {
+    throw fail("wait-policy-invalid");
+  }
+  const timeoutMs = ownValue(policy, "timeoutMs");
+  if (!isBoundedInteger(timeoutMs, MAX_TIMER_DELAY_MS)) {
+    throw fail("wait-policy-invalid");
+  }
+  return Object.freeze({ timeoutMs });
+}
+
+function createRequestWait(
+  event: SessionHttpRequest,
+  bounds: GoogleRequestWaitBounds,
+): GoogleRequestWait {
+  const startedAt = performance.now();
+  let initialRequest: Request;
+  let initialSignal: AbortSignal;
+  try {
+    initialRequest = event.request;
+    initialSignal = initialRequest.signal;
+  } catch {
+    throw fail("read-failed");
+  }
+
+  const controller = new AbortController();
+  const deadline = startedAt + bounds.timeoutMs;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let retiredError: GoogleOwnedRequestError | undefined;
+  let cleaned = false;
+  let rejectInterruption: (reason: unknown) => void = () => undefined;
+  const interruption = new Promise<never>((_, reject) => {
+    rejectInterruption = reject;
+  });
+  interruption.catch(() => undefined);
+  const retire = (code: "wait-timeout" | "wait-aborted"): void => {
+    if (retiredError !== undefined) return;
+    retiredError = fail(code);
+    try {
+      controller.abort();
+    } catch {
+      // The internal controller is local; a failure still retires this invocation.
+    }
+    rejectInterruption(retiredError);
+  };
+  const onAbort = (): void => retire("wait-aborted");
+  let listeningForAbort = false;
+  try {
+    if (initialSignal.aborted) {
+      retire("wait-aborted");
+    } else {
+      initialSignal.addEventListener("abort", onAbort, { once: true });
+      listeningForAbort = true;
+    }
+    if (retiredError === undefined) {
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) {
+        retire("wait-timeout");
+      } else {
+        timer = setTimeout(() => retire("wait-timeout"), Math.ceil(remaining));
+      }
+    }
+  } catch {
+    if (timer !== undefined) {
+      try {
+        clearTimeout(timer);
+      } catch {
+        // Preserve the sanitized setup failure if timer cleanup also fails.
+      }
+    }
+    try {
+      initialSignal.removeEventListener("abort", onAbort);
+    } catch {
+      // No external request mutation is performed during cleanup.
+    }
+    throw fail("wait-failed");
+  }
+
+  const check = (): void => {
+    if (retiredError !== undefined) throw retiredError;
+    if (performance.now() >= deadline) {
+      retire("wait-timeout");
+      throw retiredError;
+    }
+  };
+  return {
+    signal: controller.signal,
+    initialRequest,
+    initialSignal,
+    isInterruption: (error) =>
+      retiredError !== undefined && error === retiredError,
+    pauseOriginalAbort(): void {
+      if (!listeningForAbort) return;
+      try {
+        initialSignal.removeEventListener("abort", onAbort);
+        listeningForAbort = false;
+      } catch {
+        throw fail("wait-failed");
+      }
+    },
+    resumeOriginalAbort(): void {
+      if (listeningForAbort || initialSignal.aborted) return;
+      try {
+        initialSignal.addEventListener("abort", onAbort, { once: true });
+        listeningForAbort = true;
+      } catch {
+        throw fail("wait-failed");
+      }
+    },
+    async run<T>(operation: PromiseLike<T> | T): Promise<T> {
+      const pending = Promise.resolve(operation);
+      pending.catch(() => undefined);
+      check();
+      let value: T;
+      try {
+        value = await Promise.race([pending, interruption]);
+      } catch (error) {
+        check();
+        throw error;
+      }
+      check();
+      return value;
+    },
+    check,
+    cleanup(): void {
+      if (cleaned) return;
+      cleaned = true;
+      let succeeded = true;
+      if (timer !== undefined) {
+        try {
+          clearTimeout(timer);
+        } catch {
+          succeeded = false;
+        }
+      }
+      if (listeningForAbort) {
+        try {
+          initialSignal.removeEventListener("abort", onAbort);
+          listeningForAbort = false;
+        } catch {
+          succeeded = false;
+        }
+      }
+      if (!succeeded) throw fail("wait-failed");
+    },
+  };
 }
 
 function readBoundsOf(policy: unknown): GoogleRequestReadBounds {
@@ -392,28 +621,28 @@ function isBoundedInteger(value: unknown, max: number): value is number {
 async function readBoundedText(
   original: Request,
   bounds: GoogleRequestReadBounds,
+  waitSignal: AbortSignal,
 ): Promise<string> {
   let signal: AbortSignal | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let listenerAttempted = false;
-  let abortListener: (() => void) | undefined;
+  const listeners: Array<[AbortSignal, () => void]> = [];
   let abandon = false;
   let failure: GoogleOwnedRequestError | undefined;
   let text: string | undefined;
 
   try {
     signal = original.signal;
-    if (signal.aborted) {
+    if (signal.aborted || waitSignal.aborted) {
       throw readerError("read-aborted");
     }
 
     const copy = original.clone();
-    if (signal.aborted) {
+    if (signal.aborted || waitSignal.aborted) {
       throw readerError("read-aborted");
     }
     const body = copy.body;
-    if (signal.aborted) {
+    if (signal.aborted || waitSignal.aborted) {
       throw readerError("read-aborted");
     }
     if (body === null) {
@@ -426,21 +655,23 @@ async function readBoundedText(
         rejectInterruption = rejectPromise;
       });
       interruption.catch(() => undefined);
-      abortListener = (): void =>
+      const abortListener = (): void =>
         rejectInterruption(readerError("read-aborted"));
 
       timer = setTimeout(
         () => rejectInterruption(readerError("read-timeout")),
         bounds.timeoutMs,
       );
-      listenerAttempted = true;
-      signal.addEventListener("abort", abortListener, { once: true });
+      for (const readSignal of [signal, waitSignal]) {
+        listeners.push([readSignal, abortListener]);
+        readSignal.addEventListener("abort", abortListener, { once: true });
+      }
 
       const decoder = new TextDecoder("utf-8");
       const pieces: string[] = [];
       let received = 0;
       for (;;) {
-        if (signal.aborted) {
+        if (signal.aborted || waitSignal.aborted) {
           throw readerError("read-aborted");
         }
         if (performance.now() >= deadline) {
@@ -450,7 +681,7 @@ async function readBoundedText(
         if (performance.now() >= deadline) {
           throw readerError("read-timeout");
         }
-        if (signal.aborted) {
+        if (signal.aborted || waitSignal.aborted) {
           throw readerError("read-aborted");
         }
         if (step.done) {
@@ -498,13 +729,9 @@ async function readBoundedText(
         cleanupSucceeded = false;
       }
     }
-    if (
-      listenerAttempted &&
-      signal !== undefined &&
-      abortListener !== undefined
-    ) {
+    for (const [readSignal, listener] of listeners) {
       try {
-        signal.removeEventListener("abort", abortListener);
+        readSignal.removeEventListener("abort", listener);
       } catch {
         cleanupSucceeded = false;
       }
