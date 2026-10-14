@@ -38,7 +38,17 @@ carry separate evidence. A binary switch or capped budget can cover several logi
 result keeps the full compatible set separate from the levels admitted by a fixed/range policy.
 Variant names are not evidence. An explicit variant is never replaced, and the validator never
 chooses a variant or a per-run level. Recognizing a native effort field does not establish a
-particular model's advertised support; the full model-specific Pi admission check remains unfinished.
+particular model's advertised support.
+
+The selector now checks 29 direct OpenAI and four direct xAI Responses rows from Pi AI `0.87.1`.
+It uses declared provider/package/model identity and compares the mapped effort, summary and encrypted
+include together; unresolved aliases or conflicting identities are not treated as permanently
+unsupported. Native recognition of `max` does not admit it for GPT-5. Provider defaults and recursive
+body overlays remain part of the comparison: `undefined` does not delete inherited fields. Ten
+advertised GPT-5 off recipes cannot satisfy the required summary omission through the checked valid
+metadata path. The matcher keeps those controls unproven, rather than selecting a fallback or altering
+the request. This is conditional source-snapshot evidence, not authentication, final-wire controls or
+provider acceptance. The other Responses wrappers and full model-specific admission remain unfinished.
 
 A separate, unwired adapter can plan and register owned budget variants for verified nonadaptive
 Anthropic models. It preserves user variants, rejects any reserved-prefix collision and waits for

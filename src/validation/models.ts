@@ -83,6 +83,7 @@ type CatalogModel = {
   readonly providerID: string;
   readonly id: string;
   readonly modelID: string;
+  readonly canonical?: string;
   readonly enabled: boolean;
   readonly package?: string;
   readonly limit: { readonly output: number };
@@ -347,47 +348,110 @@ async function readCatalog(catalog: ModelCatalog): Promise<CatalogResult> {
     // The host message is dropped on purpose: it can carry credentials or provider detail.
     return { ok: false };
   }
-  const data = isPlainRecord(listed) ? listed.data : undefined;
-  if (!Array.isArray(data) || ![...data].every(isCatalogModel)) {
+  try {
+    const data = isPlainRecord(listed) ? ownData(listed, "data") : undefined;
+    if (!Array.isArray(data)) return { ok: false };
+    const models = Array.from(data, snapshotCatalogModel);
+    if (models.some((model) => model === undefined)) return { ok: false };
+    return { ok: true, models: models as CatalogModel[] };
+  } catch {
     return { ok: false };
   }
-  return { ok: true, models: data };
 }
 
-function isCatalogModel(value: unknown): value is CatalogModel {
-  if (!isPlainRecord(value)) {
-    return false;
-  }
-  return (
-    typeof value.providerID === "string" &&
-    typeof value.id === "string" &&
-    typeof value.modelID === "string" &&
-    typeof value.enabled === "boolean" &&
-    (value.package === undefined || typeof value.package === "string") &&
-    isCatalogLimit(value.limit) &&
-    Array.isArray(value.variants) &&
-    [...value.variants].every(isCatalogVariant)
-  );
+function snapshotCatalogModel(value: unknown): CatalogModel | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  if (
+    [
+      "providerID",
+      "id",
+      "modelID",
+      "canonical",
+      "enabled",
+      "package",
+      "limit",
+      "variants",
+      "settings",
+      "headers",
+      "body",
+    ].some((key) => hasOwnAccessor(value, key))
+  )
+    return undefined;
+  const providerID = ownData(value, "providerID");
+  const id = ownData(value, "id");
+  const modelID = ownData(value, "modelID");
+  const canonical = ownData(value, "canonical");
+  const enabled = ownData(value, "enabled");
+  const packageName = ownData(value, "package");
+  const limit = ownData(value, "limit");
+  const variants = ownData(value, "variants");
+  if (
+    typeof providerID !== "string" ||
+    typeof id !== "string" ||
+    typeof modelID !== "string" ||
+    typeof enabled !== "boolean" ||
+    (canonical !== undefined && typeof canonical !== "string") ||
+    (packageName !== undefined && typeof packageName !== "string") ||
+    !isCatalogLimit(limit) ||
+    !Array.isArray(variants)
+  )
+    return undefined;
+  const safeVariants = Array.from(variants, snapshotCatalogVariant);
+  if (safeVariants.some((variant) => variant === undefined)) return undefined;
+  const settings = ownData(value, "settings");
+  const headers = ownData(value, "headers");
+  const body = ownData(value, "body");
+  return {
+    providerID,
+    id,
+    modelID,
+    canonical,
+    enabled,
+    package: packageName,
+    limit,
+    settings,
+    headers,
+    body,
+    variants: safeVariants as ThinkingVariant[],
+  };
 }
 
 // The output limit bounds the Pi budget translation. Only a finite positive number is read.
 function isCatalogLimit(value: unknown): value is { output: number } {
-  return (
-    isPlainRecord(value) &&
-    typeof value.output === "number" &&
-    Number.isFinite(value.output) &&
-    value.output > 0
-  );
+  if (!isPlainRecord(value) || hasOwnAccessor(value, "output")) return false;
+  const output = ownData(value, "output");
+  return typeof output === "number" && Number.isFinite(output) && output > 0;
 }
 
 // An empty or hash-containing id cannot be written as a Model.Ref, so it cannot be a launch option.
-function isCatalogVariant(value: unknown): value is ThinkingVariant {
-  return (
-    isPlainRecord(value) &&
-    typeof value.id === "string" &&
-    value.id !== "" &&
-    !value.id.includes("#")
-  );
+function snapshotCatalogVariant(value: unknown): ThinkingVariant | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  if (
+    ["id", "settings", "headers", "body"].some((key) =>
+      hasOwnAccessor(value, key),
+    )
+  )
+    return undefined;
+  const id = ownData(value, "id");
+  if (typeof id !== "string" || id === "" || id.includes("#")) return undefined;
+  return {
+    id,
+    settings: ownData(value, "settings"),
+    headers: ownData(value, "headers"),
+    body: ownData(value, "body"),
+  };
+}
+
+function ownData(value: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && "value" in descriptor
+    ? descriptor.value
+    : undefined;
+}
+
+function hasOwnAccessor(value: object, key: string): boolean {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor !== undefined && !("value" in descriptor);
 }
 
 function onceAsync<T>(load: () => Promise<T>): () => Promise<T> {

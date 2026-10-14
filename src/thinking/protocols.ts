@@ -300,8 +300,9 @@ function ownField(record: unknown, key: string): unknown {
   if (typeof record !== "object" || record === null) {
     return undefined;
   }
-  return Object.hasOwn(record, key)
-    ? (record as Record<string, unknown>)[key]
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  return descriptor !== undefined && "value" in descriptor
+    ? descriptor.value
     : undefined;
 }
 
@@ -318,7 +319,12 @@ function exactFields(
     return undefined;
   }
   for (const key of Object.keys(value)) {
-    if (value[key] !== undefined && !allowed.includes(key)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !("value" in descriptor) ||
+      (descriptor.value !== undefined && !allowed.includes(key))
+    ) {
       return undefined;
     }
   }
@@ -374,14 +380,29 @@ function responsesFamilyWith(levels: readonly ThinkingLevel[]): Family {
       "reasoningEffort",
       "reasoningSummary",
     ]);
-    if (settings === undefined || bodyOf(variant) !== undefined) {
+    const body = bodyOf(variant);
+    const reasoning = ownField(body, "reasoning");
+    const reasoningControls =
+      reasoning === undefined
+        ? {}
+        : exactFields(reasoning, ["effort", "summary"]);
+    if (
+      settings === undefined ||
+      (body !== undefined && !isPlainRecord(body)) ||
+      (isPlainRecord(body) &&
+        ["reasoning_effort", "reasoning_summary", "reasoningSummary"].some(
+          (key) => Object.hasOwn(body, key),
+        )) ||
+      reasoningControls === undefined
+    ) {
       return undefined;
     }
-    return proofOf(
-      "native",
-      OPENCODE_RESPONSES,
-      effortLevels(ownField(settings, "reasoningEffort"), levels),
-    );
+    const bodyEffort = ownField(reasoningControls, "effort");
+    const effort =
+      bodyEffort === undefined
+        ? ownField(settings, "reasoningEffort")
+        : bodyEffort;
+    return proofOf("native", OPENCODE_RESPONSES, effortLevels(effort, levels));
   };
 }
 
@@ -810,22 +831,46 @@ const FAMILY_BY_PACKAGE: ReadonlyMap<string, Family> = new Map<string, Family>([
 // Model-level overlays other than compaction could change the wire the variant sends. Their merge
 // order with the variant is not verified here, so they hide every proof.
 function hasOnlyCompactionSettings(model: ProtocolModel): boolean {
-  return exactFields(model.settings, ["compaction"]) !== undefined;
+  const settings = ownField(model, "settings");
+  if (exactFields(settings, ["compaction"]) !== undefined) return true;
+  const packageName = ownField(model, "package");
+  if (
+    packageName !== "@opencode/ai/providers/openai" &&
+    packageName !== "@opencode/ai/providers/xai"
+  )
+    return false;
+  return (
+    exactFields(settings, [
+      "compaction",
+      "include",
+      "reasoningEffort",
+      "reasoningSummary",
+    ]) !== undefined
+  );
 }
 
 export function recognizeVariantProof(
   model: ProtocolModel,
   variant: ProtocolVariant,
 ): ContractProof | undefined {
+  const modelBody = ownField(model, "body");
+  const packageName = ownField(model, "package");
+  const responsesPackage =
+    packageName === "@opencode/ai/providers/openai" ||
+    packageName === "@opencode/ai/providers/xai";
+  const knownResponsesBody =
+    responsesPackage &&
+    exactFields(modelBody, ["include", "reasoning"]) !== undefined &&
+    exactFields(ownField(modelBody, "reasoning"), ["effort", "summary"]) !==
+      undefined;
   if (
     ownField(variant, "headers") !== undefined ||
     ownField(model, "headers") !== undefined ||
-    ownField(model, "body") !== undefined ||
+    (modelBody !== undefined && !knownResponsesBody) ||
     !hasOnlyCompactionSettings(model)
   ) {
     return undefined;
   }
-  const packageName = ownField(model, "package");
   if (typeof packageName !== "string") {
     return undefined;
   }

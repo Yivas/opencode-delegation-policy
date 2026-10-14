@@ -68,7 +68,7 @@ function catalogModel(providerID, id, overrides = {}) {
     modelID: id,
     providerID,
     name: id,
-    package: OPENAI,
+    package: "@opencode/ai/providers/groq",
     capabilities: { tools: true, input: ["text"], output: ["text"] },
     variants: [],
     time: { released: 0 },
@@ -83,7 +83,7 @@ function catalogModel(providerID, id, overrides = {}) {
 function effortVariant(id, level) {
   return {
     id,
-    settings: { reasoningEffort: level, reasoningSummary: "auto", include: [] },
+    settings: { reasoningEffort: level },
   };
 }
 
@@ -1704,9 +1704,33 @@ test("settings inherited through a prototype do not prove the fixed level", asyn
 
 // Family matrix through the validator and the real PreferenceStore. Each row configures one
 // ordinary role with an arbitrary variant id; the expected outcome is the role-specific result.
-function familyCatalog(variants, modelID = "synthetic-model", overrides = {}) {
+function familyCatalog(variants, modelID = "gpt-5.4", overrides = {}) {
+  const packageName = overrides.package ?? OPENAI;
+  const providerID =
+    packageName === OPENAI
+      ? "openai"
+      : packageName === "@opencode/ai/providers/alibaba/chat"
+        ? "alibaba"
+        : packageName === "@opencode/ai/providers/openrouter"
+          ? "openrouter"
+          : "acme";
+  const responseVariants =
+    packageName === OPENAI
+      ? variants.map((variant) => ({
+          ...variant,
+          settings: {
+            ...variant.settings,
+            reasoningSummary: "auto",
+            include: ["reasoning.encrypted_content"],
+          },
+        }))
+      : variants;
   return [
-    catalogModel("acme", modelID, { package: OPENAI, ...overrides, variants }),
+    catalogModel(providerID, modelID, {
+      package: packageName,
+      ...overrides,
+      variants: responseVariants,
+    }),
   ];
 }
 
@@ -1798,7 +1822,7 @@ test("an inline variant with a proven matching level is kept exactly as written"
 test("an inline variant proven off conflicts with a fixed high and is reported, not replaced", async () => {
   const result = await validateSmallWithFixed(
     "high",
-    "acme/synthetic-model#custom-off",
+    "alibaba/synthetic-model#custom-off",
     familyCatalog(
       [
         { id: "custom-off", settings: { enableThinking: false } },
@@ -1821,7 +1845,7 @@ test("an inline variant proven off conflicts with a fixed high and is reported, 
 test("budget-only variants make a fixed level unmapped, distinct from unsupported", async () => {
   const result = await validateSmallWithFixed(
     "high",
-    "acme/synthetic-model",
+    "openrouter/synthetic-model",
     familyCatalog(
       [
         { id: "high", settings: { reasoning: { max_tokens: 8000 } } },
@@ -1861,13 +1885,13 @@ test("an Advisor fixed off with an explicit disable control is valid, and delega
     advisorMode: "on",
     roles: {
       small: configured("acme/small-model"),
-      advisor: configured("acme/synthetic-model#no-thinking"),
+      advisor: configured("alibaba/synthetic-model#no-thinking"),
     },
     thinking: { advisor: { kind: "fixed", level: "off" } },
   });
   const catalog = catalogDouble([
     catalogModel("acme", "small-model"),
-    catalogModel("acme", "synthetic-model", {
+    catalogModel("alibaba", "synthetic-model", {
       package: "@opencode/ai/providers/alibaba/chat",
       variants: [{ id: "no-thinking", settings: { enableThinking: false } }],
     }),
@@ -1885,7 +1909,7 @@ test("an Advisor fixed off with an explicit disable control is valid, and delega
     advisor: {
       role: "advisor",
       model: {
-        providerID: "acme",
+        providerID: "alibaba",
         id: "synthetic-model",
         variant: "no-thinking",
       },

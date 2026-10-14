@@ -1,5 +1,6 @@
 import type { ThinkingSetting } from "../state/schema.js";
 import { recognizeVariantProof, type TransportKind } from "./protocols.js";
+import { admitResponsesVariant } from "./responses-admission.js";
 
 // Canonical names, ordered from least to most reasoning. The host has no level field: a
 // variant's level exists only where a public protocol overlay spells it out.
@@ -23,7 +24,10 @@ export type ThinkingIssueCode =
   | "thinking-variant-unproven"
   | "thinking-variant-mismatch"
   | "thinking-unmapped"
-  | "thinking-unsupported";
+  | "thinking-unsupported"
+  | "thinking-pi-level-unsupported"
+  | "thinking-identity-unresolved"
+  | "thinking-controls-unproven";
 
 // Structural subset of the host's model metadata (Model.Info from @opencode/schema 2.0.21).
 // The catalogue port supplies these objects; this module only reads them.
@@ -36,7 +40,9 @@ export type ThinkingVariant = {
 
 export type ThinkingModel = {
   readonly providerID: string;
+  readonly id?: string;
   readonly modelID?: string;
+  readonly canonical?: string;
   readonly package?: string;
   readonly limit?: { readonly output?: unknown };
   readonly settings?: unknown;
@@ -137,13 +143,33 @@ export function selectThinkingVariant(
   }
 
   if (inlineVariant !== undefined) {
-    const proof = knownThinkingProof(model, inlineVariant);
-    if (proof === undefined) {
-      return { ok: false, code: "thinking-variant-unproven" };
+    const selected = selectedProof(model, inlineVariant);
+    if (!selected.ok) {
+      if (
+        requirementUnsupported(selected.unsupportedLevels ?? [], requirement)
+      ) {
+        return { ok: false, code: "thinking-pi-level-unsupported" };
+      }
+      if (
+        selected.nativeLevels !== undefined &&
+        selected.nativeLevels.length > 0 &&
+        selected.nativeLevels.every((level) =>
+          selected.unsupportedLevels?.includes(level),
+        )
+      ) {
+        return { ok: false, code: "thinking-variant-mismatch" };
+      }
+      return { ok: false, code: selected.code };
     }
+    const proof = selected.proof;
     const admittedLevels = admit(proof.compatibleLevels, requirement);
     if (admittedLevels.length === 0) {
-      return { ok: false, code: "thinking-variant-mismatch" };
+      return {
+        ok: false,
+        code: requirementUnsupported(selected.unsupportedLevels, requirement)
+          ? "thinking-pi-level-unsupported"
+          : "thinking-variant-mismatch",
+      };
     }
     return {
       ok: true,
@@ -157,13 +183,27 @@ export function selectThinkingVariant(
 
   const options: ThinkingOption[] = [];
   let unprovenVariant = false;
+  let unsupportedRequiredLevel = false;
   for (const variant of model.variants) {
-    const proof = knownThinkingProof(model, variant);
-    if (proof === undefined) {
+    const selected = selectedProof(model, variant);
+    if (!selected.ok) {
+      if (selected.code === "thinking-identity-unresolved") return selected;
+      unsupportedRequiredLevel ||= requirementUnsupported(
+        selected.unsupportedLevels ?? [],
+        requirement,
+      );
       unprovenVariant = true;
       continue;
     }
+    const proof = selected.proof;
     const admittedLevels = admit(proof.compatibleLevels, requirement);
+    if (admittedLevels.length === 0) {
+      unsupportedRequiredLevel ||= requirementUnsupported(
+        selected.unsupportedLevels,
+        requirement,
+      );
+      continue;
+    }
     if (admittedLevels.length > 0) {
       options.push({
         variant: variant.id,
@@ -174,10 +214,60 @@ export function selectThinkingVariant(
   if (options.length === 0) {
     return {
       ok: false,
-      code: unprovenVariant ? "thinking-unmapped" : "thinking-unsupported",
+      code: unsupportedRequiredLevel
+        ? "thinking-pi-level-unsupported"
+        : unprovenVariant
+          ? "thinking-unmapped"
+          : "thinking-unsupported",
     };
   }
   return { ok: true, selection: { kind: "options", options } };
+}
+
+function selectedProof(
+  model: ThinkingModel,
+  variant: ThinkingVariant,
+):
+  | {
+      readonly ok: true;
+      readonly proof: Omit<ThinkingProof, "admittedLevels">;
+      readonly unsupportedLevels: readonly ThinkingLevel[];
+    }
+  | {
+      readonly ok: false;
+      readonly code: ThinkingIssueCode;
+      readonly unsupportedLevels?: readonly ThinkingLevel[];
+      readonly nativeLevels?: readonly ThinkingLevel[];
+    } {
+  let nativeProof: ReturnType<typeof knownThinkingProof>;
+  try {
+    nativeProof = knownThinkingProof(model, variant);
+  } catch {
+    return { ok: false, code: "thinking-controls-unproven" };
+  }
+  const admission = admitResponsesVariant(model, variant);
+  if (admission.kind === "unresolved") {
+    return { ok: false, code: "thinking-identity-unresolved" };
+  }
+  if (admission.kind === "unproven-controls") {
+    return {
+      ok: false,
+      code: "thinking-controls-unproven",
+      unsupportedLevels: admission.unsupportedLevels,
+      nativeLevels: nativeProof?.compatibleLevels,
+    };
+  }
+  if (admission.kind === "matched") {
+    return {
+      ok: true,
+      proof: admission.proof,
+      unsupportedLevels: admission.unsupportedLevels,
+    };
+  }
+  if (nativeProof === undefined) {
+    return { ok: false, code: "thinking-variant-unproven" };
+  }
+  return { ok: true, proof: nativeProof, unsupportedLevels: [] };
 }
 
 function withAdmitted(
@@ -190,6 +280,16 @@ function withAdmitted(
     admittedLevels,
     evidence: proof.evidence,
   };
+}
+
+// A partially advertised range is not a model-level rejection: its remaining controls may be unproven.
+function requirementUnsupported(
+  unsupportedLevels: readonly ThinkingLevel[],
+  requirement: ThinkingRequirement,
+): boolean {
+  return admit(THINKING_LEVELS, requirement).every((level) =>
+    unsupportedLevels.includes(level),
+  );
 }
 
 // The levels of a compatible set that fall inside the inclusive requirement, in canonical order.

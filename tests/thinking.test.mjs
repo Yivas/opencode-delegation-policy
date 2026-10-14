@@ -30,7 +30,14 @@ function effortOverlay(level) {
 }
 
 function model(overrides = {}) {
-  return { package: OPENAI, variants: [], ...overrides };
+  return {
+    id: "gpt-5.4",
+    modelID: "gpt-5.4",
+    providerID: "openai",
+    package: OPENAI,
+    variants: [],
+    ...overrides,
+  };
 }
 
 function variant(id, overlay = {}) {
@@ -178,7 +185,7 @@ test("headers or body on the variant or the model make the level obscure", () =>
       model({ settings: { reasoningEffort: "low" } }),
       variant("v", effortOverlay("high")),
     ),
-    undefined,
+    "high",
   );
 });
 
@@ -236,13 +243,23 @@ test("a fixed requirement rejects an inline variant with another or no proven le
       { from: "high", to: "high" },
       budget,
     ),
-    { ok: false, code: "thinking-variant-unproven" },
+    { ok: false, code: "thinking-controls-unproven" },
   );
 });
 
 test("a range accepts an inline variant only inside the inclusive bounds", () => {
   const range = { from: "low", to: "high" };
-  const inside = (level) => variant(level, effortOverlay(level));
+  const inside = (level) => {
+    const item = variant(level, effortOverlay(level));
+    return {
+      ...item,
+      settings: {
+        ...item.settings,
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+      },
+    };
+  };
   const variants = ["minimal", "low", "medium", "high", "xhigh"].map(inside);
 
   for (const level of ["low", "medium", "high"]) {
