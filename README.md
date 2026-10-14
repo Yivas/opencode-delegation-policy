@@ -39,7 +39,10 @@ full compatible set separate from the levels admitted by a fixed/range policy. C
 recipes also retain their grouped levels, but do not prove request-level admission.
 Variant names are not evidence. An explicit variant is never replaced, and the validator never
 chooses a variant or a per-run level. Recognizing a native effort field does not establish a
-particular model's advertised support.
+particular model's advertised support. Readers now classify native-field facts separately from
+model-specific Pi recipes. The selector does not admit a logical thinking requirement from a
+native-field fact alone, including an off switch on an unlisted model. Those facts remain available
+for inspection; the classification is not backend, ownership or final-request verification.
 
 The selector now checks 29 direct OpenAI and four direct xAI Responses rows from Pi AI `0.87.1`.
 It uses declared provider/package/model identity and compares the mapped effort, summary and encrypted

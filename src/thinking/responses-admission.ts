@@ -1029,6 +1029,7 @@ export function admitResponsesVariant(
     compatibleLevels: compatible,
     unsupportedLevels,
     proof: {
+      sourceScope: "pi-model-recipe",
       transportKind: "native",
       compatibleLevels: compatible,
       evidence: `${sourceFile} ${identity.provider}/${identity.modelID}; ${identity.provider === "github-copilot" ? COPILOT_RESPONSES_EVIDENCE : identity.provider === "meta" ? META_RESPONSES_EVIDENCE : RESPONSES_EVIDENCE}; ${projection} (conditional, not final wire)`,

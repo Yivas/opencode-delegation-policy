@@ -25,8 +25,11 @@ import type { ThinkingLevel } from "./policies.js";
 type Overlay = Readonly<Record<string, unknown>>;
 
 export type TransportKind = "native" | "budget" | "binary";
+// Describes the evidence producer, not provider ownership or runtime wire compatibility.
+export type ProofSourceScope = "native-fields" | "pi-model-recipe";
 
 export type ContractProof = {
+  readonly sourceScope: ProofSourceScope;
   readonly transportKind: TransportKind;
   readonly compatibleLevels: readonly ThinkingLevel[];
   readonly evidence: string;
@@ -343,13 +346,14 @@ function effortLevels(
 }
 
 function proofOf(
+  sourceScope: ProofSourceScope,
   transportKind: TransportKind,
   evidence: string,
   levels: readonly ThinkingLevel[],
 ): ContractProof | undefined {
   return levels.length === 0
     ? undefined
-    : { transportKind, compatibleLevels: levels, evidence };
+    : { sourceScope, transportKind, compatibleLevels: levels, evidence };
 }
 
 function settingsOf(variant: ProtocolVariant): unknown {
@@ -403,7 +407,12 @@ function responsesFamilyWith(levels: readonly ThinkingLevel[]): Family {
       bodyEffort === undefined
         ? ownField(settings, "reasoningEffort")
         : bodyEffort;
-    return proofOf("native", OPENCODE_RESPONSES, effortLevels(effort, levels));
+    return proofOf(
+      "native-fields",
+      "native",
+      OPENCODE_RESPONSES,
+      effortLevels(effort, levels),
+    );
   };
 }
 
@@ -417,6 +426,7 @@ const chatFamily: Family = (variant) => {
     return undefined;
   }
   return proofOf(
+    "native-fields",
     "native",
     OPENCODE_CHAT,
     effortLevels(ownField(settings, "reasoningEffort"), GENERIC_EFFORTS),
@@ -441,10 +451,11 @@ const alibabaChatFamily: Family = (variant) => {
   const enabled = ownField(settings, "enableThinking");
   const effort = ownField(settings, "reasoningEffort");
   if (enabled === false && effort === undefined) {
-    return proofOf("binary", OPENCODE_ALIBABA_CHAT, ["off"]);
+    return proofOf("native-fields", "binary", OPENCODE_ALIBABA_CHAT, ["off"]);
   }
   if (enabled === true) {
     return proofOf(
+      "native-fields",
       "native",
       OPENCODE_ALIBABA_CHAT,
       effortLevels(effort, GENERIC_EFFORTS),
@@ -501,7 +512,7 @@ const zaiChatFamily: Family = (variant, model) => {
 
   if (type === "disabled" && effort === undefined) {
     return ZAI_OFF_MODEL_IDS.has(modelID)
-      ? proofOf("binary", evidence, ["off"])
+      ? proofOf("pi-model-recipe", "binary", evidence, ["off"])
       : undefined;
   }
   if (type !== "enabled") {
@@ -509,14 +520,25 @@ const zaiChatFamily: Family = (variant, model) => {
   }
   if (ZAI_BINARY_MODEL_IDS.has(modelID)) {
     return effort === undefined
-      ? proofOf("binary", evidence, ["minimal", "low", "medium", "high"])
+      ? proofOf("pi-model-recipe", "binary", evidence, [
+          "minimal",
+          "low",
+          "medium",
+          "high",
+        ])
       : undefined;
   }
   if (ZAI_EFFORT_HIGH_MAX_MODEL_IDS.has(modelID)) {
-    return proofOf("native", evidence, effortLevels(effort, ["high", "max"]));
+    return proofOf(
+      "pi-model-recipe",
+      "native",
+      evidence,
+      effortLevels(effort, ["high", "max"]),
+    );
   }
   if (ZAI_EFFORT_LOW_HIGH_MAX_MODEL_IDS.has(modelID)) {
     return proofOf(
+      "pi-model-recipe",
       "native",
       evidence,
       effortLevels(effort, ["low", "high", "max"]),
@@ -540,10 +562,11 @@ const zaiMessagesFamily: Family = (variant) => {
   const type = ownField(thinking, "type");
   const effort = ownField(settings, "effort");
   if (type === "disabled" && (effort === undefined || effort === "none")) {
-    return proofOf("binary", OPENCODE_ZAI_MESSAGES, ["off"]);
+    return proofOf("native-fields", "binary", OPENCODE_ZAI_MESSAGES, ["off"]);
   }
   if (type === "enabled") {
     return proofOf(
+      "native-fields",
       "native",
       OPENCODE_ZAI_MESSAGES,
       effortLevels(effort, GENERIC_EFFORTS),
@@ -575,7 +598,12 @@ const anthropicFamily: Family = (variant, model) => {
     const type = ownField(adaptiveThinking, "type");
     if (type === "adaptive" && typeof effort === "string") {
       return Object.hasOwn(entry.efforts, effort)
-        ? proofOf("native", entry.evidence, entry.efforts[effort] ?? [])
+        ? proofOf(
+            "pi-model-recipe",
+            "native",
+            entry.evidence,
+            entry.efforts[effort] ?? [],
+          )
         : undefined;
     }
     if (
@@ -584,7 +612,7 @@ const anthropicFamily: Family = (variant, model) => {
       ownField(adaptiveThinking, "display") === undefined &&
       entry.offSupported
     ) {
-      return proofOf("binary", entry.evidence, ["off"]);
+      return proofOf("pi-model-recipe", "binary", entry.evidence, ["off"]);
     }
     return undefined;
   }
@@ -605,7 +633,12 @@ const anthropicFamily: Family = (variant, model) => {
   const snake = ownField(budgetThinking, "budget_tokens");
   if (type === "disabled") {
     return camel === undefined && snake === undefined
-      ? proofOf("binary", `${PI_ANTHROPIC_0_87_1} ${modelID} disabled`, ["off"])
+      ? proofOf(
+          "pi-model-recipe",
+          "binary",
+          `${PI_ANTHROPIC_0_87_1} ${modelID} disabled`,
+          ["off"],
+        )
       : undefined;
   }
 
@@ -640,10 +673,15 @@ const moonshotChatFamily: Family = (variant, model) => {
     }
     const evidence = `${PI_MOONSHOT_0_87_1} kimi-k2.6`;
     if (type === "enabled") {
-      return proofOf("binary", evidence, ["minimal", "low", "medium", "high"]);
+      return proofOf("pi-model-recipe", "binary", evidence, [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+      ]);
     }
     return type === "disabled"
-      ? proofOf("binary", evidence, ["off"])
+      ? proofOf("pi-model-recipe", "binary", evidence, ["off"])
       : undefined;
   }
   if (model.modelID === "kimi-k3") {
@@ -651,6 +689,7 @@ const moonshotChatFamily: Family = (variant, model) => {
       return undefined;
     }
     return proofOf(
+      "pi-model-recipe",
       "native",
       `${PI_MOONSHOT_0_87_1} kimi-k3`,
       effortLevels(effort, ["low", "high", "max"]),
@@ -689,11 +728,12 @@ const deepseekFamily: Family = (variant, model) => {
   const effort = ownField(settings, "reasoningEffort");
   if (type === "disabled") {
     return effort === undefined
-      ? proofOf("binary", evidence, ["off"])
+      ? proofOf("pi-model-recipe", "binary", evidence, ["off"])
       : undefined;
   }
   if (type === "enabled") {
     return proofOf(
+      "pi-model-recipe",
       "native",
       evidence,
       effortLevels(effort, DEEPSEEK_PI_EFFORTS[modelID] ?? []),
@@ -725,6 +765,7 @@ const openrouterFamily: Family = (variant) => {
     return undefined;
   }
   return proofOf(
+    "native-fields",
     "native",
     OPENCODE_OPENROUTER,
     effortLevels(ownField(reasoning, "effort"), GENERIC_EFFORTS),
@@ -766,7 +807,9 @@ const geminiFamily: Family = (variant, model) => {
     thinkingBudget === undefined &&
     (GEMINI_NATIVE_LEVELS as readonly string[]).includes(level)
   ) {
-    return proofOf("native", OPENCODE_GEMINI, [level as ThinkingLevel]);
+    return proofOf("native-fields", "native", OPENCODE_GEMINI, [
+      level as ThinkingLevel,
+    ]);
   }
   const api = googleApiForPackage(model.package);
   if (api === undefined || typeof level !== "string") {
@@ -778,7 +821,12 @@ const geminiFamily: Family = (variant, model) => {
     includeThoughts,
   });
   return compatibility.kind === "compatible-unconditional"
-    ? proofOf("native", compatibility.evidence, compatibility.compatibleLevels)
+    ? proofOf(
+        "pi-model-recipe",
+        "native",
+        compatibility.evidence,
+        compatibility.compatibleLevels,
+      )
     : undefined;
 };
 

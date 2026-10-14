@@ -1,5 +1,9 @@
 import type { ThinkingSetting } from "../state/schema.js";
-import { recognizeVariantProof, type TransportKind } from "./protocols.js";
+import {
+  type ProofSourceScope,
+  recognizeVariantProof,
+  type TransportKind,
+} from "./protocols.js";
 import { admitResponsesVariant } from "./responses-admission.js";
 
 // Canonical names, ordered from least to most reasoning. The host has no level field: a
@@ -115,16 +119,21 @@ export function thinkingRequirement(
   }
 }
 
-// The proof a variant carries, or undefined when it is unmapped. Callers that need only the level
-// set read `compatibleLevels` from this.
+// Inspect native-field facts or a model-specific Pi recipe. `sourceScope` distinguishes them;
+// native-field recognition alone does not establish a model's logical thinking support.
 export function knownThinkingProof(
   model: ThinkingModel,
   variant: ThinkingVariant,
-): Omit<ThinkingProof, "admittedLevels"> | undefined {
+):
+  | (Omit<ThinkingProof, "admittedLevels"> & {
+      readonly sourceScope: ProofSourceScope;
+    })
+  | undefined {
   return recognizeVariantProof(model, variant);
 }
 
-// Every level the variant's proof is compatible with, in proof order. Empty means unmapped.
+// Inspect the recognized level names in proof order. This does not apply the model-admission gate;
+// callers validating a thinking requirement must use selectThinkingVariant instead.
 export function knownThinkingLevels(
   model: ThinkingModel,
   variant: ThinkingVariant,
@@ -277,7 +286,10 @@ function selectedProof(
       unsupportedLevels: admission.unsupportedLevels,
     };
   }
-  if (nativeProof === undefined) {
+  if (
+    nativeProof === undefined ||
+    nativeProof.sourceScope !== "pi-model-recipe"
+  ) {
     return { ok: false, code: "thinking-variant-unproven" };
   }
   return { ok: true, proof: nativeProof, unsupportedLevels: [] };

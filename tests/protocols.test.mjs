@@ -1196,6 +1196,7 @@ test("a binary switch proof is binary and its evidence names the exact Pi model"
     variant({ settings: { thinking: { type: "enabled" } } }),
   );
 
+  assert.equal(proof.sourceScope, "pi-model-recipe");
   assert.equal(proof.transportKind, "binary");
   assert.deepEqual(proof.compatibleLevels, [
     "minimal",
@@ -1212,6 +1213,7 @@ test("an OpenCode-only wrapper proof is native and never cites Pi", () => {
     variant({ settings: { reasoningEffort: "low" } }),
   );
 
+  assert.equal(proof.sourceScope, "native-fields");
   assert.equal(proof.transportKind, "native");
   assert.deepEqual(proof.compatibleLevels, ["low"]);
   assert.match(proof.evidence, /^opencode@8a8bd622 /);
@@ -1302,6 +1304,7 @@ test("an Anthropic 1.1.0 catalogue proof cites that archive and the exact model"
     variant({ settings: { thinking: { type: "adaptive" }, effort: "high" } }),
   );
 
+  assert.equal(proof.sourceScope, "pi-model-recipe");
   assert.equal(proof.transportKind, "native");
   assert.match(proof.evidence, /^pi-ai@1.1.0 /);
   assert.match(proof.evidence, /claude-sonnet-5-5/);
@@ -1317,6 +1320,16 @@ test("an unproven overlay has no proof at all, not an empty proof", () => {
   );
 });
 
+test("generic native OpenRouter effort remains inspectable without model-row scope", () => {
+  const proof = knownThinkingProof(
+    model(PACKAGE.openrouter, "synthetic-unknown-model"),
+    variant({ settings: { reasoning: { effort: "high" } } }),
+  );
+
+  assert.equal(proof.sourceScope, "native-fields");
+  assert.deepEqual(proof.compatibleLevels, ["high"]);
+});
+
 // Responses literals are OpenCode's own schema, not a Pi translation: the proof must never cite Pi.
 test("an openai or xai responses proof cites the OpenCode schema and never Pi", () => {
   for (const packageName of [PACKAGE.responses, PACKAGE.xai]) {
@@ -1324,6 +1337,7 @@ test("an openai or xai responses proof cites the OpenCode schema and never Pi", 
       model(packageName, "gpt-5"),
       variant({ settings: { reasoningEffort: "xhigh" } }),
     );
+    assert.equal(proof.sourceScope, "native-fields");
     assert.equal(proof.transportKind, "native");
     assert.deepEqual(proof.compatibleLevels, ["xhigh"]);
     assert.equal(

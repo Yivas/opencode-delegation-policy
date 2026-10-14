@@ -87,6 +87,21 @@ function effortVariant(id, level) {
   };
 }
 
+function openAIResponsesModel(id, variants) {
+  return catalogModel("openai", id, {
+    modelID: "gpt-5.4",
+    package: OPENAI,
+    variants: variants.map((item) => ({
+      ...item,
+      settings: {
+        ...item.settings,
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+      },
+    })),
+  });
+}
+
 function configured(model) {
   return { kind: "configured", model };
 }
@@ -647,17 +662,15 @@ test("a fixed role with several proven variants returns them all for the launch 
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "off",
-    roles: { small: configured("acme/small-model") },
+    roles: { small: configured("openai/small-model") },
     thinking: { small: { kind: "fixed", level: "high" } },
   });
   const catalog = catalogDouble([
-    catalogModel("acme", "small-model", {
-      variants: [
-        effortVariant("deep", "high"),
-        effortVariant("arbitrary", "high"),
-        effortVariant("low", "low"),
-      ],
-    }),
+    openAIResponsesModel("small-model", [
+      effortVariant("deep", "high"),
+      effortVariant("arbitrary", "high"),
+      effortVariant("low", "low"),
+    ]),
   ]);
 
   const first = await validateDelegationAxes({
@@ -697,7 +710,7 @@ test("a fixed role with several proven variants returns them all for the launch 
     expected,
   );
   assert.deepEqual(first.delegation.roles[0].model, {
-    providerID: "acme",
+    providerID: "openai",
     id: "small-model",
   });
 });
@@ -708,20 +721,22 @@ test("a fixed requirement with a matching inline variant keeps that variant", as
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "off",
-    roles: { small: configured("acme/small-model#deep") },
+    roles: { small: configured("openai/small-model#deep") },
     thinking: { small: { kind: "fixed", level: "high" } },
   });
 
   const result = await validateDelegationAxes({
     store,
-    catalog: catalogDouble(standardCatalog()),
+    catalog: catalogDouble([
+      openAIResponsesModel("small-model", [effortVariant("deep", "high")]),
+    ]),
     sessionID: SESSION_ID,
   });
 
   assert.deepEqual(withoutEvidence(result.delegation.roles), [
     {
       role: "small",
-      model: { providerID: "acme", id: "small-model", variant: "deep" },
+      model: { providerID: "openai", id: "small-model", variant: "deep" },
       thinking: {
         kind: "inline",
         variant: "deep",
@@ -739,13 +754,15 @@ test("a fixed requirement rejects a conflicting inline variant instead of replac
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "off",
-    roles: { small: configured("acme/small-model#low") },
+    roles: { small: configured("openai/small-model#low") },
     thinking: { small: { kind: "fixed", level: "high" } },
   });
 
   const result = await validateDelegationAxes({
     store,
-    catalog: catalogDouble(standardCatalog()),
+    catalog: catalogDouble([
+      openAIResponsesModel("small-model", [effortVariant("low", "low")]),
+    ]),
     sessionID: SESSION_ID,
   });
 
@@ -805,19 +822,17 @@ test("a range rejects reversed bounds, unknown levels and a model without proven
 
 test("a range accepts an inline variant on its endpoints and rejects one outside", async () => {
   const catalog = [
-    catalogModel("acme", "small-model", {
-      variants: [
-        effortVariant("low", "low"),
-        effortVariant("medium", "medium"),
-        effortVariant("high", "high"),
-      ],
-    }),
+    openAIResponsesModel("small-model", [
+      effortVariant("low", "low"),
+      effortVariant("medium", "medium"),
+      effortVariant("high", "high"),
+    ]),
   ];
 
   for (const [reference, expected] of [
-    ["acme/small-model#low", "ok"],
-    ["acme/small-model#medium", "ok"],
-    ["acme/small-model#high", "thinking-variant-mismatch"],
+    ["openai/small-model#low", "ok"],
+    ["openai/small-model#medium", "ok"],
+    ["openai/small-model#high", "thinking-variant-mismatch"],
   ]) {
     const double = createStorageDouble();
     const store = new PreferenceStore(double.storage);
@@ -886,10 +901,12 @@ test("a model change that removes the proven level invalidates the previous sele
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "off",
-    roles: { small: configured("acme/small-model") },
+    roles: { small: configured("openai/small-model") },
     thinking: { small: { kind: "fixed", level: "high" } },
   });
-  const catalog = catalogDouble(standardCatalog());
+  const catalog = catalogDouble([
+    openAIResponsesModel("small-model", [effortVariant("high", "high")]),
+  ]);
 
   const before = await validateDelegationAxes({
     store,
@@ -897,9 +914,7 @@ test("a model change that removes the proven level invalidates the previous sele
     sessionID: SESSION_ID,
   });
   catalog.models = [
-    catalogModel("acme", "small-model", {
-      variants: [effortVariant("low", "low")],
-    }),
+    openAIResponsesModel("small-model", [effortVariant("low", "low")]),
   ];
   const after = await validateDelegationAxes({
     store,
@@ -1202,12 +1217,15 @@ test("validation never mutates the catalogue or the persisted view", async () =>
     intensity: "normal",
     advisorMode: "on",
     roles: {
-      small: configured("acme/small-model#deep"),
+      small: configured("openai/small-model#deep"),
       advisor: configured("acme/advisor-model"),
     },
     thinking: { small: { kind: "fixed", level: "high" } },
   });
-  const catalog = catalogDouble(standardCatalog());
+  const catalog = catalogDouble([
+    openAIResponsesModel("small-model", [effortVariant("deep", "high")]),
+    catalogModel("acme", "advisor-model"),
+  ]);
   const catalogBefore = structuredClone(catalog.models);
   const storedBefore = double.records.get(GLOBAL_KEY);
   const writesBefore = double.writes.length;
@@ -1226,7 +1244,7 @@ test("validation never mutates the catalogue or the persisted view", async () =>
   const view = await store.readSession(SESSION_ID);
   assert.deepEqual(
     view.preferences.roles.small,
-    configured("acme/small-model#deep"),
+    configured("openai/small-model#deep"),
   );
 });
 
@@ -1644,17 +1662,31 @@ test("a range from off keeps only the proven levels inside it", async () => {
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "off",
-    roles: { small: configured("acme/small-model") },
+    roles: { small: configured("xai/grok-4.3") },
     thinking: { small: { kind: "range", from: "off", to: "low" } },
   });
 
   const result = await validateDelegationAxes({
     store,
     catalog: catalogDouble([
-      catalogModel("acme", "small-model", {
+      catalogModel("xai", "grok-4.3", {
+        package: "@opencode/ai/providers/xai",
         variants: [
-          effortVariant("arbitrary", "off"),
-          effortVariant("low", "low"),
+          {
+            id: "arbitrary",
+            settings: {
+              reasoningEffort: "none",
+              include: ["reasoning.encrypted_content"],
+            },
+          },
+          {
+            id: "low",
+            settings: {
+              reasoningEffort: "low",
+              reasoningSummary: "auto",
+              include: ["reasoning.encrypted_content"],
+            },
+          },
         ],
       }),
     ]),
@@ -1664,6 +1696,12 @@ test("a range from off keeps only the proven levels inside it", async () => {
   assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
     kind: "options",
     options: [
+      {
+        variant: "arbitrary",
+        transportKind: "native",
+        compatibleLevels: ["off"],
+        admittedLevels: ["off"],
+      },
       {
         variant: "low",
         transportKind: "native",
@@ -1819,18 +1857,24 @@ test("an inline variant with a proven matching level is kept exactly as written"
   });
 });
 
-test("an inline variant proven off conflicts with a fixed high and is reported, not replaced", async () => {
+test("an inline source-mapped off variant conflicts with fixed high and is not replaced", async () => {
   const result = await validateSmallWithFixed(
     "high",
-    "alibaba/synthetic-model#custom-off",
-    familyCatalog(
-      [
-        { id: "custom-off", settings: { enableThinking: false } },
-        effortVariant("custom-high", "high"),
-      ],
-      "synthetic-model",
-      { package: "@opencode/ai/providers/alibaba/chat" },
-    ),
+    "xai/grok-4.3#custom-off",
+    [
+      catalogModel("xai", "grok-4.3", {
+        package: "@opencode/ai/providers/xai",
+        variants: [
+          {
+            id: "custom-off",
+            settings: {
+              reasoningEffort: "none",
+              include: ["reasoning.encrypted_content"],
+            },
+          },
+        ],
+      }),
+    ],
   );
 
   assert.deepEqual(result.delegation, {
@@ -1863,6 +1907,63 @@ test("budget-only variants make a fixed level unmapped, distinct from unsupporte
   });
 });
 
+test("native OpenRouter effort fields do not admit a model-specific role", async () => {
+  const result = await validateSmallWithFixed(
+    "high",
+    "openrouter/synthetic-unknown-model",
+    familyCatalog(
+      [
+        {
+          id: "high",
+          settings: { reasoning: { effort: "high" } },
+        },
+      ],
+      "synthetic-unknown-model",
+      { package: "@opencode/ai/providers/openrouter" },
+    ),
+  );
+
+  assert.deepEqual(result.delegation, {
+    status: "error",
+    issues: [
+      { role: "small", field: "thinking", code: "thinking-unmapped" },
+      { field: "roles", code: "no-ordinary-role" },
+    ],
+  });
+});
+
+test("a DeepSeek catalogue recipe remains eligible for role thinking", async () => {
+  const result = await validateSmallWithFixed(
+    "high",
+    "deepseek/deepseek-flash",
+    [
+      catalogModel("deepseek", "deepseek-flash", {
+        package: "@opencode/ai/providers/deepseek",
+        variants: [
+          {
+            id: "deep",
+            settings: { reasoningEffort: "high" },
+            body: { thinking: { type: "enabled" } },
+          },
+        ],
+      }),
+    ],
+  );
+
+  assert.equal(result.delegation.status, "active");
+  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
+    kind: "options",
+    options: [
+      {
+        variant: "deep",
+        transportKind: "native",
+        compatibleLevels: ["high"],
+        admittedLevels: ["high"],
+      },
+    ],
+  });
+});
+
 test("a model whose only variant proves another level is unsupported for the requested one", async () => {
   const result = await validateSmallWithFixed(
     "max",
@@ -1877,7 +1978,7 @@ test("a model whose only variant proves another level is unsupported for the req
   });
 });
 
-test("an Advisor fixed off with an explicit disable control is valid, and delegation is independent of it", async () => {
+test("native Alibaba off syntax does not prove model-specific role eligibility", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
@@ -1904,23 +2005,11 @@ test("an Advisor fixed off with an explicit disable control is valid, and delega
   });
 
   assert.equal(result.delegation.status, "active");
-  assert.deepEqual(withoutEvidence(result.advisor), {
-    status: "active",
-    advisor: {
-      role: "advisor",
-      model: {
-        providerID: "alibaba",
-        id: "synthetic-model",
-        variant: "no-thinking",
-      },
-      thinking: {
-        kind: "inline",
-        variant: "no-thinking",
-        transportKind: "binary",
-        compatibleLevels: ["off"],
-        admittedLevels: ["off"],
-      },
-    },
+  assert.deepEqual(result.advisor, {
+    status: "error",
+    issues: [
+      { role: "advisor", field: "thinking", code: "thinking-variant-unproven" },
+    ],
   });
 });
 
