@@ -10,6 +10,7 @@ const PACKAGE_BY_PROVIDER = Object.freeze({
   openai: "@opencode/ai/providers/openai",
   xai: "@opencode/ai/providers/xai",
   meta: "@opencode/ai/providers/meta/responses",
+  "cloudflare-ai-gateway": "@opencode/ai/providers/cloudflare-ai-gateway",
 });
 const OPENCODE_FACADE_PACKAGES = new Set([
   "@opencode/ai/providers/openai",
@@ -531,6 +532,161 @@ const LEVEL_MAPS: Readonly<
     xhigh: "xhigh",
     max: null,
   },
+  // Cloudflare's native OpenAI Responses route requires the provider's openai/ model prefix.
+  // These are the exact Pi AI 0.87.1 providers/data/cloudflare-ai-gateway.json rows.
+  "cloudflare-ai-gateway/gpt-5": {
+    off: null,
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5-mini": {
+    off: null,
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5-nano": {
+    off: null,
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5.1": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5.4": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5.4-mini": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5.4-nano": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5.4-pro": {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5.5": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5.5-pro": {
+    off: null,
+    minimal: null,
+    low: null,
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "cloudflare-ai-gateway/gpt-5.6-luna": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "cloudflare-ai-gateway/gpt-5.6-sol": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "cloudflare-ai-gateway/gpt-5.6-terra": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "cloudflare-ai-gateway/gpt-6-astra": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "cloudflare-ai-gateway/o3": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "cloudflare-ai-gateway/o3-mini": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
+  "cloudflare-ai-gateway/o4-mini": {
+    off: null,
+    minimal: null,
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: null,
+    max: null,
+  },
 });
 
 for (const row of Object.values(LEVEL_MAPS)) {
@@ -593,6 +749,12 @@ export function admitResponsesVariant(
 
   const rawLevels = LEVEL_MAPS[`${identity.provider}/${identity.modelID}`];
   if (rawLevels === undefined) return { kind: "unresolved" };
+  if (
+    identity.provider === "cloudflare-ai-gateway" &&
+    !hasNativeCloudflareBaseURL(model, variant)
+  ) {
+    return { kind: "unresolved" };
+  }
   const levels = completeLevelMap(rawLevels, identity);
   const advertisedLevels = CANONICAL_LEVELS.filter(
     (level) => levels[level] !== null,
@@ -601,6 +763,16 @@ export function admitResponsesVariant(
     (level) => levels[level] === null,
   );
   if (identity.route === "generic" && !hasDeclaredBaseURL(model, variant)) {
+    return {
+      kind: "construction-unproven",
+      advertisedLevels,
+      unsupportedLevels,
+    };
+  }
+  if (
+    identity.provider === "cloudflare-ai-gateway" &&
+    !hasCloudflareAccountId(model, variant)
+  ) {
     return {
       kind: "construction-unproven",
       advertisedLevels,
@@ -647,15 +819,17 @@ export function admitResponsesVariant(
   }
 
   const sourceFile =
-    identity.provider === "openai"
-      ? PI_OPENAI
-      : identity.provider === "xai"
-        ? PI_XAI
-        : identity.provider === "meta"
-          ? PI_META
-          : identity.provider === "opencode"
-            ? PI_OPENCODE
-            : PI_OPENCODE_GO;
+    identity.provider === "cloudflare-ai-gateway"
+      ? "pi-ai@0.87.1 providers/data/cloudflare-ai-gateway.json"
+      : identity.provider === "openai"
+        ? PI_OPENAI
+        : identity.provider === "xai"
+          ? PI_XAI
+          : identity.provider === "meta"
+            ? PI_META
+            : identity.provider === "opencode"
+              ? PI_OPENCODE
+              : PI_OPENCODE_GO;
   const projection = offCompatible
     ? expectedOffInclude === "encrypted"
       ? "OpenCode Responses projection: effort=none, summary absent, encrypted include retained"
@@ -694,7 +868,13 @@ function completeLevelMap(
   ) as Record<ThinkingLevel, string | null>;
 }
 
-type ResponsesProvider = "openai" | "xai" | "meta" | "opencode" | "opencode-go";
+type ResponsesProvider =
+  | "openai"
+  | "xai"
+  | "meta"
+  | "opencode"
+  | "opencode-go"
+  | "cloudflare-ai-gateway";
 type ResponsesRoute = "native" | "facade" | "generic";
 type Identity =
   | { readonly kind: "outside-scope" }
@@ -721,11 +901,13 @@ function readIdentity(model: ThinkingModel): Identity {
     const packageName = ownData(model, "package");
     const isOpencodeProvider =
       typeof providerID === "string" && OPENCODE_PROVIDER_IDS.has(providerID);
+    const isCloudflareProvider = providerID === "cloudflare-ai-gateway";
     const knownProvider =
       providerID === "openai" ||
       providerID === "xai" ||
       providerID === "meta" ||
-      isOpencodeProvider;
+      isOpencodeProvider ||
+      isCloudflareProvider;
     const knownPackage =
       Object.values(PACKAGE_BY_PROVIDER).some(
         (value) => value === packageName,
@@ -743,6 +925,9 @@ function readIdentity(model: ThinkingModel): Identity {
       else if (packageName === OPENCODE_GENERIC_RESPONSES_PACKAGE)
         route = "generic";
       else return { kind: "unresolved" };
+    } else if (isCloudflareProvider) {
+      if (packageName !== PACKAGE_BY_PROVIDER["cloudflare-ai-gateway"])
+        return { kind: "unresolved" };
     } else {
       const expectedPackage =
         PACKAGE_BY_PROVIDER[providerID as keyof typeof PACKAGE_BY_PROVIDER];
@@ -756,14 +941,26 @@ function readIdentity(model: ThinkingModel): Identity {
     const modelID = ownData(model, "modelID");
     const id = ownData(model, "id");
     const effectiveID = modelID ?? id;
-    return typeof effectiveID === "string" && effectiveID.length > 0
-      ? {
-          kind: "resolved",
-          provider: providerID as ResponsesProvider,
-          modelID: effectiveID,
-          route,
-        }
-      : { kind: "unresolved" };
+    if (typeof effectiveID !== "string" || effectiveID.length === 0)
+      return { kind: "unresolved" };
+    if (isCloudflareProvider) {
+      const prefix = "openai/";
+      if (!effectiveID.startsWith(prefix)) return { kind: "unresolved" };
+      const sourceModelID = effectiveID.slice(prefix.length);
+      if (sourceModelID.length === 0) return { kind: "unresolved" };
+      return {
+        kind: "resolved",
+        provider: providerID,
+        modelID: sourceModelID,
+        route,
+      };
+    }
+    return {
+      kind: "resolved",
+      provider: providerID as ResponsesProvider,
+      modelID: effectiveID,
+      route,
+    };
   } catch {
     return { kind: "unresolved" };
   }
@@ -843,6 +1040,58 @@ function readControls(
       : undefined;
   } catch {
     return undefined;
+  }
+}
+
+function hasNativeCloudflareBaseURL(
+  model: ThinkingModel,
+  variant: ThinkingVariant,
+): boolean {
+  try {
+    const modelSettings = ownData(model, "settings");
+    const variantSettings = ownData(variant, "settings");
+    if (
+      (modelSettings !== undefined && !isRecord(modelSettings)) ||
+      (variantSettings !== undefined && !isRecord(variantSettings)) ||
+      (modelSettings !== undefined && hasAccessor(modelSettings, "baseURL")) ||
+      (variantSettings !== undefined && hasAccessor(variantSettings, "baseURL"))
+    ) {
+      return false;
+    }
+    return (
+      ownData(variantSettings, "baseURL") === undefined &&
+      ownData(modelSettings, "baseURL") === undefined
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasCloudflareAccountId(
+  model: ThinkingModel,
+  variant: ThinkingVariant,
+): boolean {
+  try {
+    const modelSettings = ownData(model, "settings");
+    const variantSettings = ownData(variant, "settings");
+    if (
+      (modelSettings !== undefined && !isRecord(modelSettings)) ||
+      (variantSettings !== undefined && !isRecord(variantSettings)) ||
+      (modelSettings !== undefined &&
+        hasAccessor(modelSettings, "accountId")) ||
+      (variantSettings !== undefined &&
+        hasAccessor(variantSettings, "accountId"))
+    ) {
+      return false;
+    }
+    const variantAccountId = ownData(variantSettings, "accountId");
+    const accountId =
+      variantAccountId === undefined
+        ? ownData(modelSettings, "accountId")
+        : variantAccountId;
+    return typeof accountId === "string" && accountId.length > 0;
+  } catch {
+    return false;
   }
 }
 

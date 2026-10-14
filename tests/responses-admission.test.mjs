@@ -1388,3 +1388,285 @@ test("facade identity controls defaults, off recipes, and known factory routes",
     });
   }
 });
+
+const CLOUDFLARE = "@opencode/ai/providers/cloudflare-ai-gateway";
+const CLOUDFLARE_ROWS = [
+  ["gpt-5", ["minimal", "low", "medium", "high"]],
+  ["gpt-5-mini", ["minimal", "low", "medium", "high"]],
+  ["gpt-5-nano", ["minimal", "low", "medium", "high"]],
+  ["gpt-5.1", ["low", "medium", "high"]],
+  ["gpt-5.4", ["low", "medium", "high", "xhigh"]],
+  ["gpt-5.4-mini", ["low", "medium", "high", "xhigh"]],
+  ["gpt-5.4-nano", ["low", "medium", "high", "xhigh"]],
+  ["gpt-5.4-pro", ["medium", "high", "xhigh"]],
+  ["gpt-5.5", ["low", "medium", "high", "xhigh"]],
+  ["gpt-5.5-pro", ["medium", "high", "xhigh"]],
+  ["gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"]],
+  ["gpt-5.6-sol", ["low", "medium", "high", "xhigh", "max"]],
+  ["gpt-5.6-terra", ["low", "medium", "high", "xhigh", "max"]],
+  ["gpt-6-astra", ["low", "medium", "high", "xhigh", "max"]],
+  ["o3", ["low", "medium", "high"]],
+  ["o3-mini", ["low", "medium", "high"]],
+  ["o4-mini", ["low", "medium", "high"]],
+];
+const CLOUDFLARE_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+];
+
+function cloudflareModel(id, overrides = {}) {
+  return model({
+    id: `openai/${id}`,
+    modelID: `openai/${id}`,
+    providerID: "cloudflare-ai-gateway",
+    canonical: "cloudflare-ai-gateway",
+    package: CLOUDFLARE,
+    settings: { accountId: "synthetic-account" },
+    ...overrides,
+  });
+}
+
+function cloudflareCandidate(level) {
+  return variant(level, level, {
+    settings: {
+      reasoningEffort: level,
+      reasoningSummary: "auto",
+      include: ["reasoning.encrypted_content"],
+    },
+  });
+}
+
+test("the exact 17 Cloudflare Responses rows verify 119 fixed levels and 476 inclusive ranges", () => {
+  assert.equal(CLOUDFLARE_ROWS.length, 17);
+  for (const [id, advertised] of CLOUDFLARE_ROWS) {
+    const input = cloudflareModel(id);
+    const observed = admitResponsesVariant(input, {
+      id: "uncontrolled",
+      settings: { temperature: 0.3 },
+    });
+    assert.equal(observed.kind, "unproven-controls", id);
+    assert.deepEqual(observed.advertisedLevels, advertised, `${id} advertised`);
+    assert.deepEqual(
+      observed.unsupportedLevels,
+      CLOUDFLARE_LEVELS.filter((level) => !advertised.includes(level)),
+      `${id} unsupported`,
+    );
+    assert.ok(!advertised.includes("off"), `${id} does not advertise off`);
+
+    for (const level of CLOUDFLARE_LEVELS) {
+      const candidate = cloudflareCandidate(level);
+      const result = selected(input, candidate, { from: level, to: level });
+      assert.equal(result.ok, advertised.includes(level), `${id}:${level}`);
+      if (advertised.includes(level)) {
+        assert.deepEqual(result.selection.compatibleLevels, [level]);
+        assert.deepEqual(result.selection.admittedLevels, [level]);
+        assert.equal(result.selection.variant, level);
+        assert.match(
+          result.selection.evidence,
+          /cloudflare-ai-gateway\.json cloudflare-ai-gateway\//,
+        );
+        assert.match(result.selection.evidence, /conditional, not final wire/);
+      } else {
+        assert.deepEqual(result, {
+          ok: false,
+          code: "thinking-pi-level-unsupported",
+        });
+      }
+    }
+
+    const variants = advertised.map(cloudflareCandidate);
+    const withVariants = { ...input, variants };
+    for (let from = 0; from < CLOUDFLARE_LEVELS.length; from += 1) {
+      for (let to = from; to < CLOUDFLARE_LEVELS.length; to += 1) {
+        const range = {
+          from: CLOUDFLARE_LEVELS[from],
+          to: CLOUDFLARE_LEVELS[to],
+        };
+        const result = selectThinkingVariant(withVariants, range, undefined);
+        const expected = advertised
+          .filter((level) => {
+            const position = CLOUDFLARE_LEVELS.indexOf(level);
+            return position >= from && position <= to;
+          })
+          .map((level) => ({
+            variant: level,
+            compatibleLevels: [level],
+            admittedLevels: [level],
+          }));
+        assert.equal(
+          result.ok,
+          expected.length > 0,
+          `${id}:${range.from}..${range.to}`,
+        );
+        if (expected.length > 0) {
+          assert.equal(result.selection.kind, "options");
+          assert.deepEqual(
+            result.selection.options.map(
+              ({ variant: variantID, compatibleLevels, admittedLevels }) => ({
+                variant: variantID,
+                compatibleLevels,
+                admittedLevels,
+              }),
+            ),
+            expected,
+            `${id}:${range.from}..${range.to}`,
+          );
+        } else {
+          assert.deepEqual(result, {
+            ok: false,
+            code: "thinking-pi-level-unsupported",
+          });
+        }
+      }
+    }
+  }
+});
+
+test("Cloudflare requires the exact native route prefix, exact catalogue ID, and source package", () => {
+  const candidate = cloudflareCandidate("high");
+  const source = cloudflareModel("gpt-5.6-luna");
+  const positive = selected(source, candidate, high);
+  assert.equal(positive.ok, true);
+  assert.equal(positive.selection.variant, "high");
+  assert.deepEqual(positive.selection.compatibleLevels, ["high"]);
+  assert.deepEqual(
+    admitResponsesVariant(source, candidate).proof.transportKind,
+    "native",
+  );
+  assert.deepEqual(source.id, "openai/gpt-5.6-luna");
+  assert.deepEqual(source.modelID, "openai/gpt-5.6-luna");
+
+  for (const altered of [
+    { id: "gpt-5.6-luna", modelID: "gpt-5.6-luna" },
+    { id: "openai/gpt-5.6-luna", modelID: "gpt-5.6-luna" },
+    { id: "openai/gpt-5.6-luna", modelID: "openai/unknown-model" },
+    { id: "openai/gpt-5.6-luna", modelID: "openai/openai/gpt-5.6-luna" },
+    { id: "openai/gpt-5.6-luna", modelID: "openai/" },
+    { id: "openai/gpt-5.6-luna", modelID: "openai/gpt-5.6-luna-alias" },
+    { providerID: "openai" },
+    { package: "@opencode/ai/providers/openai" },
+    { canonical: "openai" },
+  ]) {
+    assert.deepEqual(
+      selected(cloudflareModel("gpt-5.6-luna", altered), candidate, high),
+      { ok: false, code: "thinking-identity-unresolved" },
+    );
+  }
+
+  for (const baseURL of [
+    "https://gateway.ai.cloudflare.com/native-looking",
+    "",
+    42,
+    null,
+  ]) {
+    const configured = cloudflareModel("gpt-5.6-luna", {
+      settings: { accountId: "synthetic-account", baseURL },
+    });
+    assert.deepEqual(selected(configured, candidate, high), {
+      ok: false,
+      code: "thinking-identity-unresolved",
+    });
+  }
+  const configuredVariant = {
+    ...candidate,
+    settings: { ...candidate.settings, baseURL: "https://custom.invalid" },
+  };
+  assert.deepEqual(selected(source, configuredVariant, high), {
+    ok: false,
+    code: "thinking-identity-unresolved",
+  });
+  const undefinedOverlay = {
+    ...candidate,
+    settings: { ...candidate.settings, baseURL: undefined },
+  };
+  assert.equal(selected(source, undefinedOverlay, high).ok, true);
+});
+
+test("Cloudflare native construction requires a readable non-empty declared account ID", () => {
+  const candidate = cloudflareCandidate("high");
+  const noAccount = cloudflareModel("gpt-5.6-luna", { settings: {} });
+  assert.deepEqual(selected(noAccount, candidate, high), {
+    ok: false,
+    code: "thinking-construction-unproven",
+  });
+  for (const accountId of ["", 42, null]) {
+    const invalid = cloudflareModel("gpt-5.6-luna", {
+      settings: { accountId },
+    });
+    assert.deepEqual(selected(invalid, candidate, high), {
+      ok: false,
+      code: "thinking-construction-unproven",
+    });
+  }
+  const inherited = cloudflareModel("gpt-5.6-luna", {
+    settings: { accountId: "synthetic-account" },
+  });
+  const undefinedOverlay = {
+    ...candidate,
+    settings: { ...candidate.settings, accountId: undefined },
+  };
+  assert.equal(selected(inherited, undefinedOverlay, high).ok, true);
+  const variantAccount = {
+    ...candidate,
+    settings: { ...candidate.settings, accountId: "synthetic-variant-account" },
+  };
+  assert.equal(
+    selected(
+      cloudflareModel("gpt-5.6-luna", { settings: {} }),
+      variantAccount,
+      high,
+    ).ok,
+    true,
+  );
+
+  let accountReads = 0;
+  const secretLikeSettings = {};
+  Object.defineProperty(secretLikeSettings, "accountId", {
+    get() {
+      accountReads += 1;
+      throw new Error("must not run");
+    },
+  });
+  assert.deepEqual(
+    selected(
+      cloudflareModel("gpt-5.6-luna", { settings: secretLikeSettings }),
+      candidate,
+      high,
+    ),
+    { ok: false, code: "thinking-construction-unproven" },
+  );
+  assert.equal(accountReads, 0);
+});
+
+test("Cloudflare does not infer facade defaults or source-model support for an unprefixed reference", () => {
+  const input = cloudflareModel("gpt-5.6-luna");
+  const effortOnly = { id: "high", settings: { reasoningEffort: "high" } };
+  assert.deepEqual(selected(input, effortOnly, high), {
+    ok: false,
+    code: "thinking-controls-unproven",
+  });
+  const off = variant("off", "none", {
+    settings: { reasoningEffort: "none", include: [] },
+  });
+  assert.deepEqual(selected(input, off, { from: "off", to: "off" }), {
+    ok: false,
+    code: "thinking-pi-level-unsupported",
+  });
+  assert.deepEqual(
+    selected(
+      cloudflareModel("gpt-5.6-luna", {
+        id: "gpt-5.6-luna",
+        modelID: "gpt-5.6-luna",
+        settings: { accountId: "synthetic-account", baseURL: "custom" },
+      }),
+      cloudflareCandidate("high"),
+      high,
+    ),
+    { ok: false, code: "thinking-identity-unresolved" },
+  );
+});

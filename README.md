@@ -60,7 +60,12 @@ The compatible base package is Chat and is not admitted as Responses. A missing 
 `baseURL` is an unproven construction prerequisite, not proof of a bad model or a trusted endpoint.
 OpenCode off recipes omit both summary and inclusion regardless of the selected factory.
 Canonical conflicts and unknown routes remain unresolved; no request, identity or endpoint is changed.
-Cloudflare/Copilot and full model-specific thinking admission remain unfinished.
+Cloudflare AI Gateway adds 17 exact source rows through its native Responses route. The declared
+model ID must use `openai/`; only the verified native branch strips that prefix for the Pi lookup.
+A custom REST `baseURL` remains unresolved, and a missing declared `accountId` is an unproven
+construction prerequisite, not an authentication result. Cloudflare requires explicit automatic
+summary and does not advertise off in this snapshot. No model reference or request is rewritten.
+Copilot and full model-specific thinking admission remain unfinished.
 
 A separate, unwired adapter can plan and register owned budget variants for verified nonadaptive
 Anthropic models. It preserves user variants, rejects any reserved-prefix collision and waits for
