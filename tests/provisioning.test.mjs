@@ -53,7 +53,7 @@ test("a verified nonadaptive Anthropic model gets one owned variant per Pi budge
   );
 });
 
-test("each owned variant is recognized as the levels its budget proves", () => {
+test("owned budget variants preserve catalogue recipes without proving request-level thinking", () => {
   const plan = planOwnedBudgetVariants(eligible({ limit: { output: 4000 } }));
   assert.equal(plan.ok, true);
   const model = {
@@ -64,18 +64,18 @@ test("each owned variant is recognized as the levels its budget proves", () => {
     variants: [],
   };
 
-  const expected = {
-    "ocv2-budget-1024": ["minimal"],
-    "ocv2-budget-2048": ["low"],
-    "ocv2-budget-2976": ["medium", "high"],
-  };
-  for (const variant of plan.variants) {
-    assert.deepEqual(
-      knownThinkingLevels(model, variant),
-      expected[variant.id],
+  assert.deepEqual(
+    plan.variants.map((variant) => [
       variant.id,
-    );
-  }
+      variant.settings.thinking.budgetTokens,
+      knownThinkingLevels(model, variant),
+    ]),
+    [
+      ["ocv2-budget-1024", 1024, []],
+      ["ocv2-budget-2048", 2048, []],
+      ["ocv2-budget-2976", 2976, []],
+    ],
+  );
 });
 
 test("a lowered limit collapses high and medium into one owned budget that covers both", () => {

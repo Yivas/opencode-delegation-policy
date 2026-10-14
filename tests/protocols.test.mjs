@@ -5,6 +5,11 @@ import {
   knownThinkingLevels,
   knownThinkingProof,
 } from "../dist/thinking/policies.js";
+import {
+  ANTHROPIC_PI_DEFAULT_BUDGETS,
+  anthropicBudgetLevels,
+  anthropicEffectiveBudgets,
+} from "../dist/thinking/protocols.js";
 
 const PACKAGE = {
   responses: "@opencode/ai/providers/openai",
@@ -214,49 +219,50 @@ const MATRIX = [
     [],
   ],
 
-  // Anthropic budget models (Pi default budgets 1024/2048/8192/16384, default off..high).
+  // Anthropic manual budgets: keep the catalogue inputs covered, but never treat the projection
+  // as a request-level proof because this reader has no request max_tokens.
   [
-    "Anthropic sonnet-4-5 budget 1024 proves minimal",
+    "Anthropic sonnet-4-5 1024 recipe is not a request-level proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5"),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 1024 } },
     }),
-    ["minimal"],
+    [],
   ],
   [
-    "Anthropic sonnet-4-5 budget 2048 proves low",
+    "Anthropic sonnet-4-5 2048 recipe is not a request-level proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5"),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 2048 } },
     }),
-    ["low"],
+    [],
   ],
   [
-    "Anthropic sonnet-4-5 budget 8192 proves medium",
+    "Anthropic sonnet-4-5 8192 recipe is not a request-level proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5"),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 8192 } },
     }),
-    ["medium"],
+    [],
   ],
   [
-    "Anthropic sonnet-4-5 budget 16384 proves high",
+    "Anthropic sonnet-4-5 16384 recipe is not a request-level proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5"),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 16384 } },
     }),
-    ["high"],
+    [],
   ],
   [
-    "Anthropic sonnet-4-5 budget_tokens spelling proves the same level",
+    "Anthropic sonnet-4-5 snake-case budget recipe is not a request-level proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5"),
     variant({
       settings: { thinking: { type: "enabled", budget_tokens: 2048 } },
     }),
-    ["low"],
+    [],
   ],
   [
-    "Anthropic sonnet-4-5 budget 16000 is not Pi's high budget",
+    "Anthropic sonnet-4-5 budget 16000 has no catalogue recipe or proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5"),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 16000 } },
@@ -274,7 +280,7 @@ const MATRIX = [
     [],
   ],
   [
-    "Anthropic sonnet-4-5 disabled proves off",
+    "Anthropic sonnet-4-5 disabled still proves off",
     model(PACKAGE.anthropic, "claude-sonnet-4-5"),
     variant({ settings: { thinking: { type: "disabled" } } }),
     ["off"],
@@ -291,23 +297,23 @@ const MATRIX = [
     [],
   ],
   [
-    "Anthropic haiku dated id uses the same budget proof",
+    "Anthropic haiku dated id recipe is not a request-level proof",
     model(PACKAGE.anthropic, "claude-haiku-4-5-20251001"),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 8192 } },
     }),
-    ["medium"],
+    [],
   ],
   [
-    "Anthropic opus-4-5 dated id uses the same budget proof",
+    "Anthropic opus dated id recipe is not a request-level proof",
     model(PACKAGE.anthropic, "claude-opus-4-5-20251101"),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 1024 } },
     }),
-    ["minimal"],
+    [],
   ],
   [
-    "Anthropic budget variant on an adaptive model is not a budget level",
+    "Anthropic adaptive model budget is unmapped",
     model(PACKAGE.anthropic, "claude-opus-4-8"),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 2048 } },
@@ -315,29 +321,29 @@ const MATRIX = [
     [],
   ],
 
-  // Lowered output limit: Pi caps each budget at limit - 1024 (answer reserve), so levels can share one budget.
+  // Lower output limits still produce catalogue recipes, not request-level proofs.
   [
-    "Limit 4000 caps high and medium to 2976, which proves both",
+    "Limit 4000 recipe 2976 maps medium and high in the catalogue only",
     model(PACKAGE.anthropic, "claude-sonnet-4-5", {
       limit: { context: 200000, output: 4000 },
     }),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 2976 } },
     }),
-    ["medium", "high"],
+    [],
   ],
   [
-    "Limit 4000 keeps minimal at 1024",
+    "Limit 4000 minimal recipe is not a request-level proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5", {
       limit: { context: 200000, output: 4000 },
     }),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 1024 } },
     }),
-    ["minimal"],
+    [],
   ],
   [
-    "Limit 4000 no longer produces the uncapped 8192",
+    "Limit 4000 does not produce the 8192 recipe",
     model(PACKAGE.anthropic, "claude-sonnet-4-5", {
       limit: { context: 200000, output: 4000 },
     }),
@@ -347,17 +353,17 @@ const MATRIX = [
     [],
   ],
   [
-    "Limit 2048 caps every budget to 1024, so all four levels share it",
+    "Limit 2048 maps all four levels to one catalogue recipe, not a request proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5", {
       limit: { context: 200000, output: 2048 },
     }),
     variant({
       settings: { thinking: { type: "enabled", budgetTokens: 1024 } },
     }),
-    ["minimal", "low", "medium", "high"],
+    [],
   ],
   [
-    "Limit below the answer reserve plus minimum produces no budget level",
+    "Limit below answer reserve plus minimum has no recipe or proof",
     model(PACKAGE.anthropic, "claude-sonnet-4-5", {
       limit: { context: 200000, output: 1500 },
     }),
@@ -1211,24 +1217,83 @@ test("an OpenCode-only wrapper proof is native and never cites Pi", () => {
   assert.match(proof.evidence, /^opencode@8a8bd622 /);
 });
 
-test("an Anthropic budget proof is budget transport, cited to the model-derived cap", () => {
-  const proof = knownThinkingProof(
-    model(PACKAGE.anthropic, "claude-sonnet-4-5", {
-      limit: { context: 200000, output: 2048 },
-    }),
-    variant({
-      settings: { thinking: { type: "enabled", budgetTokens: 1024 } },
-    }),
-  );
-
-  assert.equal(proof.transportKind, "budget");
-  assert.deepEqual(proof.compatibleLevels, [
-    "minimal",
-    "low",
-    "medium",
-    "high",
+test("Anthropic catalogue recipe levels remain projections, not request-level proofs", () => {
+  assert.deepEqual(ANTHROPIC_PI_DEFAULT_BUDGETS, [
+    ["minimal", 1024],
+    ["low", 2048],
+    ["medium", 8192],
+    ["high", 16384],
   ]);
-  assert.match(proof.evidence, /model-derived cap/);
+
+  for (const [outputLimit, budget, levels] of [
+    [64000, 1024, ["minimal"]],
+    [64000, 2048, ["low"]],
+    [64000, 8192, ["medium"]],
+    [64000, 16384, ["high"]],
+    [4000, 1024, ["minimal"]],
+    [4000, 2048, ["low"]],
+    [4000, 2976, ["medium", "high"]],
+    [4000, 8192, []],
+    [2048, 1024, ["minimal", "low", "medium", "high"]],
+    [1500, 1024, []],
+  ]) {
+    assert.deepEqual(anthropicBudgetLevels(outputLimit, budget), levels);
+  }
+  for (const outputLimit of [undefined, null, 0, Number.NaN, "64000"]) {
+    assert.deepEqual(anthropicBudgetLevels(outputLimit, 1024), []);
+  }
+  assert.deepEqual(anthropicEffectiveBudgets(2048), [
+    {
+      budgetTokens: 1024,
+      levels: ["minimal", "low", "medium", "high"],
+    },
+  ]);
+
+  const manualModels = [
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
+    "claude-opus-4-5",
+    "claude-opus-4-5-20251101",
+    "claude-sonnet-4-5",
+    "claude-sonnet-4-5-20250929",
+  ];
+  for (const modelID of manualModels) {
+    assert.equal(
+      knownThinkingProof(
+        model(PACKAGE.anthropic, modelID, {
+          limit: { context: 200000, output: 64000 },
+        }),
+        variant({
+          settings: { thinking: { type: "enabled", budgetTokens: 8192 } },
+        }),
+      ),
+      undefined,
+      modelID,
+    );
+  }
+});
+
+test("Anthropic disabled thinking proves off without reading the catalogue output limit", () => {
+  let limitReads = 0;
+  const disabledModel = {
+    providerID: "anthropic",
+    modelID: "claude-sonnet-4-5",
+    package: PACKAGE.anthropic,
+    variants: [],
+    get limit() {
+      limitReads += 1;
+      return { output: 64000 };
+    },
+  };
+
+  assert.deepEqual(
+    knownThinkingLevels(
+      disabledModel,
+      variant({ settings: { thinking: { type: "disabled" } } }),
+    ),
+    ["off"],
+  );
+  assert.equal(limitReads, 0);
 });
 
 test("an Anthropic 1.1.0 catalogue proof cites that archive and the exact model", () => {

@@ -2003,7 +2003,7 @@ test("a fixed minimal is admitted by the variant Pi also maps to low, reported a
   });
 });
 
-test("a budget proof on a lowered limit admits every level its shared budget covers", async () => {
+test("a catalogue-capped Anthropic budget does not validate a role's request level", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
@@ -2015,11 +2015,11 @@ test("a budget proof on a lowered limit admits every level its shared budget cov
   const catalog = catalogDouble([
     catalogModel("anthropic", "claude-sonnet-4-5", {
       package: "@opencode/ai/providers/anthropic",
-      limit: { context: 200000, output: 2048 },
+      limit: { context: 200000, output: 64000 },
       variants: [
         {
           id: "capped",
-          settings: { thinking: { type: "enabled", budgetTokens: 1024 } },
+          settings: { thinking: { type: "enabled", budgetTokens: 16384 } },
         },
       ],
     }),
@@ -2031,12 +2031,10 @@ test("a budget proof on a lowered limit admits every level its shared budget cov
     sessionID: SESSION_ID,
   });
 
-  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
-    kind: "inline",
-    variant: "capped",
-    transportKind: "budget",
-    compatibleLevels: ["minimal", "low", "medium", "high"],
-    admittedLevels: ["high"],
+  assert.deepEqual(result.delegation.issues[0], {
+    role: "small",
+    field: "thinking",
+    code: "thinking-variant-unproven",
   });
 });
 

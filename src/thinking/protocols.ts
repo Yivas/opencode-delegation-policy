@@ -76,7 +76,7 @@ const PI_ZAI_0_87_1 = "pi-ai@0.87.1 providers/data/zai.json";
 const PI_MOONSHOT_0_87_1 = "pi-ai@0.87.1 providers/data/moonshotai.json";
 const PI_DEEPSEEK_0_87_1 = "pi-ai@0.87.1 providers/data/deepseek.json";
 
-// Pi default budgets (api/simple-options.js, 0.87.1). A budget is sent as the same number on the wire.
+// Pi 0.87.1 default Anthropic budget recipes (api/simple-options.js); request-level fitting may change them.
 export const ANTHROPIC_PI_DEFAULT_BUDGETS: readonly (readonly [
   ThinkingLevel,
   number,
@@ -237,9 +237,9 @@ const ANTHROPIC_ADAPTIVE_MODEL_ENTRIES: Readonly<
   },
 };
 
-// Pi's budget for one level, after the model's output cap is applied. Pi caps each budget at
-// limit - answer reserve, so levels can share one budget. This is the requested recipe at the
-// model-derived cap; the request's own max_tokens can clamp it further at runtime.
+// Catalogue recipe for one level at the model's output cap. Pi caps each budget at
+// limit - answer reserve, so levels can share one budget. This projection does not prove the
+// request-level budget after the caller's max_tokens is applied.
 export function anthropicBudgetLevels(
   outputLimit: unknown,
   budget: number,
@@ -256,7 +256,8 @@ export function anthropicBudgetLevels(
   ).map(([level]) => level);
 }
 
-// The budgets Pi would send for one output limit, grouped by the value they share.
+// Catalogue budget recipes for one output limit, grouped by the value they share. These are not
+// request-level proofs: Anthropic's native reader can fit an enabled budget to request max_tokens.
 export function anthropicEffectiveBudgets(outputLimit: unknown): readonly {
   readonly budgetTokens: number;
   readonly levels: readonly ThinkingLevel[];
@@ -607,18 +608,10 @@ const anthropicFamily: Family = (variant, model) => {
       ? proofOf("binary", `${PI_ANTHROPIC_0_87_1} ${modelID} disabled`, ["off"])
       : undefined;
   }
-  if (type !== "enabled" || (camel === undefined) === (snake === undefined)) {
-    return undefined;
-  }
-  const budget = camel ?? snake;
-  if (!isPositiveInteger(budget)) {
-    return undefined;
-  }
-  return proofOf(
-    "budget",
-    `${PI_ANTHROPIC_0_87_1} ${modelID} budget (model-derived cap)`,
-    anthropicBudgetLevels(model.limit?.output, budget),
-  );
+
+  // The native reader fits an enabled budget to request max_tokens. Model.Info.limit.output and
+  // the variant overlay do not expose that cap, so a catalogue recipe cannot prove a Pi level.
+  return undefined;
 };
 
 // Moonshot chat (Pi moonshotai): kimi-k2.6 uses the deepseek format, a binary switch with no effort.

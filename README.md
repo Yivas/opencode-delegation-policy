@@ -34,8 +34,9 @@ preferences fail both axes without applying policy. Catalogue availability is no
 
 Thinking validation recognizes the six named OpenAI/xAI Responses efforts and scoped Anthropic,
 DeepSeek, Z.ai, Moonshot and Google controls. Native-field recognition and model-specific Pi translations
-carry separate evidence. A binary switch or capped budget can cover several logical levels; the
-result keeps the full compatible set separate from the levels admitted by a fixed/range policy.
+carry separate evidence. A binary switch can cover several logical levels; the result keeps the
+full compatible set separate from the levels admitted by a fixed/range policy. Catalogue budget
+recipes also retain their grouped levels, but do not prove request-level admission.
 Variant names are not evidence. An explicit variant is never replaced, and the validator never
 chooses a variant or a per-run level. Recognizing a native effort field does not establish a
 particular model's advertised support.
@@ -75,8 +76,11 @@ they require omission, not the include that this lowerer forces.
 All 106 Responses catalogue rows now have source-level admission rules. That does not complete
 thinking adaptation: unresolved metadata, omission gaps, other APIs and runtime gates remain.
 
-A separate, unwired adapter can plan and register owned budget variants for verified nonadaptive
-Anthropic models. It preserves user variants, rejects any reserved-prefix collision and waits for
+A separate, unwired adapter can plan and register owned budget variants for six source-listed manual
+Anthropic models. Those variants are catalogue recipes, not thinking-level proofs: the native reader
+can reduce their budget using the request's `max_tokens`, which role validation does not know.
+Positive budget variants therefore remain unproven; disabled thinking still proves the scoped off
+level without reading an output limit. It preserves user variants, rejects any reserved-prefix collision and waits for
 an effective catalogue read when registration is batched. Unexpected editor failures escape to the
 host's failure boundary; in a grouped host this can disable the plugin's transform group. Expected
 per-model rejections remain skips.
@@ -174,8 +178,8 @@ acceptance remain unresolved; no family registration, request consumer or role p
 
 Full thinking parity remains unfinished, including other model/wrapper branches, Gemini budget
 execution and scoped `off` controls. Pi-messages forwarding
-also leaves server-side translation unresolved. Anthropic budget recipes are checked at the
-model-derived cap, not against an actual request's output/context limit. Unit tests do not prove
+also leaves server-side translation unresolved. Anthropic catalogue budget calculations remain
+available separately; role validation does not treat them as proof at an unknown request cap. Unit tests do not prove
 the effective provider payload, launch choice or provider behavior.
 
 Real plugin loading, policy injection, native agents/launches, terminal UI, packaging and host
