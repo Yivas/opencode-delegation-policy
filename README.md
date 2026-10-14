@@ -48,7 +48,10 @@ body overlays remain part of the comparison: `undefined` does not delete inherit
 advertised GPT-5 off recipes cannot satisfy the required summary omission through the checked valid
 metadata path. The matcher keeps those controls unproven, rather than selecting a fallback or altering
 the request. This is conditional source-snapshot evidence, not authentication, final-wire controls or
-provider acceptance. The other Responses wrappers and full model-specific admission remain unfinished.
+provider acceptance. Five exact Meta Responses rows also use this selector through the verified
+`@opencode/ai/providers/meta/responses` route. They require explicit automatic summary; native
+Meta effort-only variants do not satisfy the Pi recipe. None advertises off, and only
+`muse-spark-1.3` advertises max. The other Responses wrappers and full model-specific admission remain unfinished.
 
 A separate, unwired adapter can plan and register owned budget variants for verified nonadaptive
 Anthropic models. It preserves user variants, rejects any reserved-prefix collision and waits for

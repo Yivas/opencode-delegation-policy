@@ -10,6 +10,7 @@ import { admitResponsesVariant } from "../dist/thinking/responses-admission.js";
 
 const OPENAI = "@opencode/ai/providers/openai";
 const XAI = "@opencode/ai/providers/xai";
+const META_RESPONSES = "@opencode/ai/providers/meta/responses";
 
 function model(overrides = {}) {
   return {
@@ -603,4 +604,273 @@ test("unset leaves an opaque or unresolved provider variant unchanged", () => {
       selection: { kind: "unset" },
     },
   );
+});
+
+test("Meta Responses admits exact Pi catalogue rows and mapped fixed levels", () => {
+  const rows = [
+    ["muse-spark-1.1", ["minimal", "low", "medium", "high", "xhigh"]],
+    ["muse-spark-1.2", ["minimal", "low", "medium", "high", "xhigh"]],
+    [
+      "muse-spark-1.2-contributor",
+      ["minimal", "low", "medium", "high", "xhigh"],
+    ],
+    ["muse-spark-1.3", ["minimal", "low", "medium", "high", "xhigh", "max"]],
+    [
+      "muse-spark-1.3-contributor",
+      ["minimal", "low", "medium", "high", "xhigh"],
+    ],
+  ];
+  const canonical = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const metaModel = (id, overrides = {}) =>
+    model({
+      id,
+      modelID: id,
+      providerID: "meta",
+      package: META_RESPONSES,
+      ...overrides,
+    });
+  const candidate = (level) =>
+    variant(level, level, {
+      settings: {
+        reasoningEffort: level,
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+      },
+    });
+
+  assert.equal(rows.length, 5);
+  assert.equal(
+    rows.reduce((count, [, levels]) => count + levels.length, 0),
+    26,
+  );
+  for (const [id, advertised] of rows) {
+    const input = metaModel(id);
+    const observed = admitResponsesVariant(input, {
+      id: "uncontrolled",
+      settings: { temperature: 0.3 },
+    });
+    assert.equal(observed.kind, "unproven-controls");
+    assert.deepEqual(
+      observed.advertisedLevels,
+      advertised,
+      `${id} advertisements`,
+    );
+    assert.deepEqual(
+      observed.unsupportedLevels,
+      canonical.filter((level) => !advertised.includes(level)),
+      `${id} unsupported levels`,
+    );
+
+    for (const level of canonical) {
+      const item = candidate(level);
+      const result = selected(metaModel(id, { variants: [item] }), item, {
+        from: level,
+        to: level,
+      });
+      if (advertised.includes(level)) {
+        assert.equal(result.ok, true, `${id}:${level}`);
+        assert.deepEqual(result.selection.compatibleLevels, [level]);
+        assert.deepEqual(result.selection.admittedLevels, [level]);
+        assert.equal(result.selection.variant, level);
+        assert.match(result.selection.evidence, /providers\/data\/meta\.json/);
+        assert.match(
+          result.selection.evidence,
+          /providers\/meta\/responses\.ts/,
+        );
+        assert.match(result.selection.evidence, /conditional, not final wire/);
+      } else {
+        assert.deepEqual(
+          result,
+          { ok: false, code: "thinking-pi-level-unsupported" },
+          `${id}:${level}`,
+        );
+      }
+    }
+  }
+});
+
+test("Meta Responses checks all 28 inclusive ranges without choosing or falling back", () => {
+  const rows = [
+    ["muse-spark-1.1", ["minimal", "low", "medium", "high", "xhigh"]],
+    ["muse-spark-1.2", ["minimal", "low", "medium", "high", "xhigh"]],
+    [
+      "muse-spark-1.2-contributor",
+      ["minimal", "low", "medium", "high", "xhigh"],
+    ],
+    ["muse-spark-1.3", ["minimal", "low", "medium", "high", "xhigh", "max"]],
+    [
+      "muse-spark-1.3-contributor",
+      ["minimal", "low", "medium", "high", "xhigh"],
+    ],
+  ];
+  const canonical = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+  const metaModel = (id, variants = []) =>
+    model({
+      id,
+      modelID: id,
+      providerID: "meta",
+      package: META_RESPONSES,
+      variants,
+    });
+  const variantsFor = (levels) =>
+    levels.map((level) =>
+      variant(level, level, {
+        settings: {
+          reasoningEffort: level,
+          reasoningSummary: "auto",
+          include: ["reasoning.encrypted_content"],
+        },
+      }),
+    );
+
+  for (const [id, advertised] of rows) {
+    const input = metaModel(id, variantsFor(advertised));
+    for (let from = 0; from < canonical.length; from += 1) {
+      for (let to = from; to < canonical.length; to += 1) {
+        const result = selectThinkingVariant(
+          input,
+          { from: canonical[from], to: canonical[to] },
+          undefined,
+        );
+        const expected = advertised
+          .filter(
+            (level) =>
+              canonical.indexOf(level) >= from &&
+              canonical.indexOf(level) <= to,
+          )
+          .map((level) => ({
+            variant: level,
+            compatibleLevels: [level],
+            admittedLevels: [level],
+          }));
+        assert.equal(
+          result.ok,
+          expected.length > 0,
+          `${id}:${canonical[from]}..${canonical[to]}`,
+        );
+        if (expected.length > 0) {
+          assert.equal(result.selection.kind, "options");
+          assert.deepEqual(
+            result.selection.options.map(
+              ({ variant: variantID, compatibleLevels, admittedLevels }) => ({
+                variant: variantID,
+                compatibleLevels,
+                admittedLevels,
+              }),
+            ),
+            expected,
+          );
+        } else {
+          assert.deepEqual(result, {
+            ok: false,
+            code: "thinking-pi-level-unsupported",
+          });
+        }
+      }
+    }
+  }
+});
+
+test("Meta Responses requires its summary recipe and exact declared route identity", () => {
+  const meta = model({
+    id: "muse-spark-1.3",
+    modelID: "muse-spark-1.3",
+    providerID: "meta",
+    canonical: "meta",
+    package: META_RESPONSES,
+  });
+  const missingSummary = variant("high", "high", {
+    settings: {
+      reasoningEffort: "high",
+      include: ["reasoning.encrypted_content"],
+    },
+  });
+  assert.deepEqual(selected(meta, missingSummary, high), {
+    ok: false,
+    code: "thinking-controls-unproven",
+  });
+
+  const valid = variant("high", "high", {
+    settings: {
+      reasoningEffort: "high",
+      reasoningSummary: "auto",
+      include: ["reasoning.encrypted_content"],
+    },
+  });
+  for (const altered of [
+    { ...meta, canonical: "openai" },
+    { ...meta, package: "@opencode/ai/providers/meta" },
+    { ...meta, providerID: "openai" },
+  ]) {
+    assert.deepEqual(selected(altered, valid, high), {
+      ok: false,
+      code: "thinking-identity-unresolved",
+    });
+  }
+
+  assert.equal(admitResponsesVariant(meta, valid).kind, "matched");
+  assert.equal(
+    admitResponsesVariant({ ...meta, id: "muse-spark-1.3-contributor" }, valid)
+      .kind,
+    "matched",
+    "modelID is the effective route id when present",
+  );
+  assert.equal(
+    admitResponsesVariant(
+      { ...meta, id: "muse-spark-1.3", modelID: undefined },
+      valid,
+    ).kind,
+    "matched",
+    "id is used when modelID is absent",
+  );
+});
+
+test("Meta Responses reads declared identity without getters or credential headers", () => {
+  let identityReads = 0;
+  let credentialReads = 0;
+  const modelInfo = model({
+    id: "muse-spark-1.3",
+    modelID: "muse-spark-1.3",
+    providerID: "meta",
+    package: META_RESPONSES,
+  });
+  Object.defineProperty(modelInfo, "canonical", {
+    get() {
+      identityReads += 1;
+      throw new Error("must not run");
+    },
+  });
+  const headers = {};
+  Object.defineProperty(headers, "authorization", {
+    get() {
+      credentialReads += 1;
+      throw new Error("must not run");
+    },
+  });
+  const item = variant("high", "high", {
+    headers,
+    settings: {
+      reasoningEffort: "high",
+      reasoningSummary: "auto",
+      include: ["reasoning.encrypted_content"],
+    },
+  });
+  const originalSettings = { ...item.settings };
+
+  assert.deepEqual(admitResponsesVariant(modelInfo, item), {
+    kind: "unresolved",
+  });
+  assert.equal(identityReads, 0);
+
+  const positiveModel = model({
+    id: "muse-spark-1.3",
+    modelID: "muse-spark-1.3",
+    providerID: "meta",
+    package: META_RESPONSES,
+  });
+  const result = selected(positiveModel, item, high);
+  assert.equal(result.ok, true);
+  assert.equal(credentialReads, 0);
+  assert.deepEqual(item.settings, originalSettings);
+  assert.deepEqual(item.body, undefined);
 });

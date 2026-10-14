@@ -9,9 +9,10 @@ const ENCRYPTED_REASONING = "reasoning.encrypted_content";
 const PACKAGE_BY_PROVIDER = Object.freeze({
   openai: "@opencode/ai/providers/openai",
   xai: "@opencode/ai/providers/xai",
+  meta: "@opencode/ai/providers/meta/responses",
 });
 
-// The table is a source-owned snapshot of Pi AI 0.87.1's OpenAI Responses and xAI
+// The table is a source-owned snapshot of Pi AI 0.87.1's OpenAI Responses, xAI and Meta
 // catalogue rows. Null means Pi does not advertise that level for the exact model.
 const LEVEL_MAPS: Readonly<
   Record<string, Readonly<Record<string, string | null>>>
@@ -293,6 +294,46 @@ const LEVEL_MAPS: Readonly<
     xhigh: "xhigh",
     max: null,
   },
+  "meta/muse-spark-1.1": {
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "meta/muse-spark-1.2": {
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "meta/muse-spark-1.2-contributor": {
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
+  "meta/muse-spark-1.3": {
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: "max",
+  },
+  "meta/muse-spark-1.3-contributor": {
+    minimal: "minimal",
+    low: "low",
+    medium: "medium",
+    high: "high",
+    xhigh: "xhigh",
+    max: null,
+  },
 });
 
 for (const row of Object.values(LEVEL_MAPS)) {
@@ -336,6 +377,9 @@ const RESPONSES_EVIDENCE =
   "opencode@8a8bd622 packages/ai/src/protocols/utils/open-responses-options.ts";
 const PI_OPENAI = "pi-ai@0.87.1 providers/data/openai.json";
 const PI_XAI = "pi-ai@0.87.1 providers/data/xai.json";
+const PI_META = "pi-ai@0.87.1 providers/data/meta.json";
+const META_RESPONSES_EVIDENCE =
+  "OpenCode 8a8bd622 packages/ai/src/providers/meta/responses.ts + protocols/meta-responses.ts + providers/meta.ts";
 const SAFE_NON_REASONING_INCLUDES = new Set(["code_interpreter_call.outputs"]);
 
 // Source-level admission does not authenticate a provider or prove the final wire. The returned
@@ -395,12 +439,19 @@ export function admitResponsesVariant(
     return { kind: "unproven-controls", advertisedLevels, unsupportedLevels };
   }
 
-  const sourceFile = identity.provider === "openai" ? PI_OPENAI : PI_XAI;
+  const sourceFile =
+    identity.provider === "openai"
+      ? PI_OPENAI
+      : identity.provider === "xai"
+        ? PI_XAI
+        : PI_META;
   const projection = offCompatible
     ? identity.provider === "openai"
       ? "OpenCode Responses projection: effort=none, summary absent, include absent"
       : "OpenCode Responses projection: effort=none, summary absent, encrypted include retained"
-    : "OpenCode Responses projection: mapped effort, summary=auto, encrypted include retained";
+    : identity.provider === "meta"
+      ? "OpenCode Meta Responses projection: mapped effort, summary=auto required, encrypted include retained"
+      : "OpenCode Responses projection: mapped effort, summary=auto, encrypted include retained";
   return {
     kind: "matched",
     advertisedLevels,
@@ -409,7 +460,7 @@ export function admitResponsesVariant(
     proof: {
       transportKind: "native",
       compatibleLevels: compatible,
-      evidence: `${sourceFile} ${identity.provider}/${identity.modelID}; ${RESPONSES_EVIDENCE}; ${projection} (conditional, not final wire)`,
+      evidence: `${sourceFile} ${identity.provider}/${identity.modelID}; ${identity.provider === "meta" ? META_RESPONSES_EVIDENCE : RESPONSES_EVIDENCE}; ${projection} (conditional, not final wire)`,
     },
   };
 }
@@ -430,7 +481,7 @@ type Identity =
   | { readonly kind: "unresolved" }
   | {
       readonly kind: "resolved";
-      readonly provider: "openai" | "xai";
+      readonly provider: "openai" | "xai" | "meta";
       readonly modelID: string;
     };
 
@@ -448,11 +499,15 @@ function readIdentity(model: ThinkingModel): Identity {
     const candidate =
       providerID === "openai" ||
       providerID === "xai" ||
+      providerID === "meta" ||
       packageName === PACKAGE_BY_PROVIDER.openai ||
-      packageName === PACKAGE_BY_PROVIDER.xai;
+      packageName === PACKAGE_BY_PROVIDER.xai ||
+      packageName === PACKAGE_BY_PROVIDER.meta;
     if (!candidate) return { kind: "outside-scope" };
     if (
-      (providerID !== "openai" && providerID !== "xai") ||
+      (providerID !== "openai" &&
+        providerID !== "xai" &&
+        providerID !== "meta") ||
       typeof packageName !== "string" ||
       packageName !== PACKAGE_BY_PROVIDER[providerID]
     )
@@ -476,7 +531,7 @@ type Controls = { effort: unknown; summary: unknown; include: unknown };
 function readControls(
   model: ThinkingModel,
   variant: ThinkingVariant,
-  provider: "openai" | "xai",
+  provider: "openai" | "xai" | "meta",
   modelID: string,
 ): Controls | undefined {
   try {
