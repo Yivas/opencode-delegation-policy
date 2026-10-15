@@ -33,7 +33,7 @@ and Advisor errors separate. `with-delegation` without a configured Advisor stay
 preferences fail both axes without applying policy. Catalogue availability is not authentication.
 
 Thinking validation recognizes the six named OpenAI/xAI Responses efforts and scoped Anthropic,
-DeepSeek, Z.ai, Moonshot and Google controls. Native-field recognition and model-specific Pi translations
+DeepSeek, Z.ai, Moonshot, Google and exact-model Mistral controls. Native-field recognition and model-specific Pi translations
 carry separate evidence. A binary switch can cover several logical levels; the result keeps the
 full compatible set separate from the levels admitted by a fixed/range policy. Catalogue budget
 recipes also retain their grouped levels, but do not prove request-level admission.
@@ -161,10 +161,20 @@ disablement. Fixed/range results keep the full positive compatible set and admit
 a range spanning off and positives returns both candidates without selecting one. The planner
 calculates virtual Simple caps from explicit caller-cap and estimate states, never filling unknowns
 with zero or clipping a supplied caller cap to the catalogue maximum. SDK clamping of `xhigh`/`max`
-to `high` is source evidence, not policy admission. The truthy API-key prerequisite, payload hooks,
-forwarded native settings, arbitrary body overlays and later writers remain unresolved. Control
-omission descriptors are not request settings or clearing overlays. There is no native-family
-registration, raw canonical planner, request consumer or role proof for these entries.
+to `high` is source evidence, not policy admission. The planner does not turn its omission
+descriptors into request settings or clearing overlays, and has no raw canonical request planner.
+
+The selector separately matches those nine exact source identities through
+`@opencode/ai/providers/mistral`. Despite its adapter name, Pi's `mistral-conversations` code sends
+to the same Chat Completions endpoint as the native reader. The matcher compares both effective
+controls across model/variant settings and body overlays, preserves unrelated metadata and caller
+caps, and rejects unknown IDs, contradictory controls and unproven aliases. It keeps inline variants
+and complete compatible/admitted sets without choosing a level. Off proves equivalent omission,
+not that the backend stops reasoning. This is a model-specific source recipe, not admission for any
+Mistral model that accepts a string setting. Pi's Mistral adapter requires a truthy API key; that known
+source prerequisite does not establish usable native credentials. Runtime authentication, payload
+hooks, later request options/writers and provider acceptance remain unverified. No Mistral request
+callback, agent or launch is registered by this change.
 
 A source-only Codex Simple planner covers eight exact `openai-codex-responses` entries from that
 snapshot. Positive recipes include effort and automatic summary; supported off recipes use effort

@@ -1,4 +1,5 @@
 import type { ThinkingSetting } from "../state/schema.js";
+import { admitMistralVariant } from "./mistral-admission.js";
 import {
   type ProofSourceScope,
   recognizeVariantProof,
@@ -260,6 +261,26 @@ function selectedProof(
   } catch {
     return { ok: false, code: "thinking-controls-unproven" };
   }
+  const mistralAdmission = admitMistralVariant(model, variant);
+  if (mistralAdmission.kind === "unresolved") {
+    return { ok: false, code: "thinking-identity-unresolved" };
+  }
+  if (mistralAdmission.kind === "unproven-controls") {
+    return {
+      ok: false,
+      code: "thinking-controls-unproven",
+      unsupportedLevels: mistralAdmission.unsupportedLevels,
+      nativeLevels: nativeProof?.compatibleLevels,
+    };
+  }
+  if (mistralAdmission.kind === "matched") {
+    return {
+      ok: true,
+      proof: mistralAdmission.proof,
+      unsupportedLevels: mistralAdmission.unsupportedLevels,
+    };
+  }
+
   const admission = admitResponsesVariant(model, variant);
   if (admission.kind === "unresolved") {
     return { ok: false, code: "thinking-identity-unresolved" };
