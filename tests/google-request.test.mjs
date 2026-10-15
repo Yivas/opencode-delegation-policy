@@ -938,16 +938,30 @@ test("one invocation timing out does not retire a parallel invocation using the 
   assert.equal(fastEvent.request, fastRequest);
 });
 
-test("the hook shares one deadline across classification and reading", async () => {
+test("the hook shares one deadline across classification and reading", async (t) => {
+  // Real timers may resume after the deadline; control time to exercise both classification phases.
+  let now = 0;
+  let nextTimer = 0;
+  t.mock.method(performance, "now", () => now);
+  t.mock.method(globalThis, "setTimeout", () => ++nextTimer);
+  t.mock.method(globalThis, "clearTimeout", () => {});
+
   let calls = 0;
   const request = requestFor(packet({ maxOutputTokens: 40000 }));
+  const clone = request.clone.bind(request);
+  Object.defineProperty(request, "clone", {
+    value: () => {
+      now += 5;
+      return clone();
+    },
+  });
   const event = eventFor(request);
   const hook = createGoogleOwnedRequestHook(
     {
       classify: async () => {
         calls += 1;
-        if (calls === 1) await sleep(25);
-        if (calls === 2) await sleep(25);
+        now += 25;
+        await Promise.resolve();
         return owned(BINDING);
       },
       isCurrent: () => true,
