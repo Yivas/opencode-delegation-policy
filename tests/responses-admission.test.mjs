@@ -179,6 +179,19 @@ test("summary and include controls are part of admission; unrelated body keys ar
   );
 });
 
+test("a declared body model cannot override a matched OpenAI Responses wire model identity", () => {
+  for (const bodyModel of ["openai-unlisted-future", "gpt-5.1"]) {
+    const highVariant = variant("high", "high", {
+      body: { model: bodyModel },
+    });
+    assert.deepEqual(
+      selected(model({ variants: [highVariant] }), highVariant, high),
+      { ok: false, code: "thinking-identity-unresolved" },
+      `${bodyModel} cannot replace the declared gpt-5 identity`,
+    );
+  }
+});
+
 test("controlled body overrides and malformed controls are not silently accepted", () => {
   const replacedInclude = variant("body-include", "high", {
     body: { include: [], reasoning: { effort: "high", summary: "auto" } },
@@ -2210,6 +2223,189 @@ test("Copilot requires explicit positive effort and summary while using the lowe
     { ok: false, code: "thinking-controls-unproven" },
     "Pi's declared off-to-none cannot omit Copilot's forced encrypted include",
   );
+});
+
+test("declared wire model IDs are compared across every admitted Responses family", () => {
+  const families = [
+    {
+      name: "direct OpenAI",
+      input: model({ id: "gpt-5", modelID: "gpt-5" }),
+      candidate: variant("high", "high"),
+      wireModelID: "gpt-5",
+    },
+    {
+      name: "direct xAI",
+      input: model({
+        id: "grok-4.6",
+        modelID: "grok-4.6",
+        providerID: "xai",
+        package: XAI,
+      }),
+      candidate: variant("high", "high"),
+      wireModelID: "grok-4.6",
+    },
+    {
+      name: "Meta Responses",
+      input: model({
+        id: "muse-spark-1.3",
+        modelID: "muse-spark-1.3",
+        providerID: "meta",
+        package: META_RESPONSES,
+      }),
+      candidate: variant("high", "high"),
+      wireModelID: "muse-spark-1.3",
+    },
+    {
+      name: "Console facade",
+      input: opencodeModel(
+        "opencode",
+        "gpt-6-luna",
+        "@opencode/ai/providers/openai",
+      ),
+      candidate: opencodeCandidate("high", "@opencode/ai/providers/openai"),
+      wireModelID: "gpt-6-luna",
+    },
+    {
+      name: "Console generic Responses",
+      input: opencodeModel("opencode", "gpt-6-luna", OPENCODE_GENERIC, {
+        settings: { baseURL: "declared" },
+      }),
+      candidate: opencodeCandidate("high", OPENCODE_GENERIC),
+      wireModelID: "gpt-6-luna",
+    },
+    {
+      name: "Cloudflare native Responses",
+      input: cloudflareModel("gpt-5.6-luna"),
+      candidate: cloudflareCandidate("high"),
+      wireModelID: "gpt-5.6-luna",
+    },
+    {
+      name: "GitHub Copilot Responses",
+      input: copilotModel("gpt-6-luna"),
+      candidate: copilotCandidate("high"),
+      wireModelID: "gpt-6-luna",
+    },
+  ];
+
+  for (const { name, input, candidate, wireModelID } of families) {
+    assert.equal(
+      selected(input, { ...candidate, body: { model: wireModelID } }, high).ok,
+      true,
+      `${name} accepts the verified wire ID`,
+    );
+    const contradictory = {
+      ...candidate,
+      id: "contradictory",
+      body: { model: `${wireModelID}-unlisted-future` },
+    };
+    assert.deepEqual(
+      selected(input, contradictory, high),
+      { ok: false, code: "thinking-identity-unresolved" },
+      `${name} rejects a contradictory wire ID`,
+    );
+    assert.deepEqual(
+      selectThinkingVariant(
+        { ...input, variants: [candidate, contradictory] },
+        high,
+        undefined,
+      ),
+      { ok: false, code: "thinking-identity-unresolved" },
+      `${name} does not fall back to another catalogue candidate`,
+    );
+  }
+});
+
+test("effective body model overlays use own data and reject malformed or unsafe values", () => {
+  const base = model({ body: { model: "gpt-4.1" } });
+  const inherited = {
+    id: "inherited-undefined",
+    settings: { reasoningEffort: "high", reasoningSummary: "auto" },
+    body: { model: undefined },
+  };
+  assert.deepEqual(selected(base, inherited, high), {
+    ok: false,
+    code: "thinking-identity-unresolved",
+  });
+
+  const replacement = {
+    ...inherited,
+    body: {
+      model: "gpt-5",
+      reasoning: { effort: "high", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    },
+  };
+  assert.equal(selected(base, replacement, high).ok, true);
+
+  for (const value of [null, 42, [], {}, ""]) {
+    assert.deepEqual(
+      selected(
+        model(),
+        {
+          ...variant("malformed", "high"),
+          body: { model: value },
+        },
+        high,
+      ),
+      { ok: false, code: "thinking-identity-unresolved" },
+      `malformed body.model ${String(value)}`,
+    );
+  }
+
+  let getterReads = 0;
+  const accessorBody = {};
+  Object.defineProperty(accessorBody, "model", {
+    get() {
+      getterReads += 1;
+      return "gpt-5";
+    },
+  });
+  const inheritedBody = Object.create({ model: "gpt-5" });
+  const proxyBody = new Proxy(
+    {},
+    {
+      getOwnPropertyDescriptor() {
+        throw new Error("opaque proxy trap");
+      },
+    },
+  );
+  for (const body of [accessorBody, inheritedBody]) {
+    const candidate = { ...variant("unsafe", "high"), body };
+    assert.deepEqual(admitResponsesVariant(model(), candidate), {
+      kind: "unresolved",
+    });
+    assert.deepEqual(selected(model(), candidate, high), {
+      ok: false,
+      code: "thinking-identity-unresolved",
+    });
+  }
+
+  const proxyCandidate = {
+    ...variant("unsafe-proxy", "high"),
+    body: proxyBody,
+  };
+  assert.deepEqual(admitResponsesVariant(model(), proxyCandidate), {
+    kind: "unresolved",
+  });
+  assert.deepEqual(selected(model(), proxyCandidate, high), {
+    ok: false,
+    code: "thinking-controls-unproven",
+  });
+  assert.equal(getterReads, 0);
+
+  let bodyGetterReads = 0;
+  const accessorOwner = model();
+  Object.defineProperty(accessorOwner, "body", {
+    get() {
+      bodyGetterReads += 1;
+      return { model: "gpt-5" };
+    },
+  });
+  assert.deepEqual(
+    admitResponsesVariant(accessorOwner, variant("high", "high")),
+    { kind: "unresolved" },
+  );
+  assert.equal(bodyGetterReads, 0);
 });
 
 test("Copilot route and control readers do not execute accessors or inspect credential headers", () => {

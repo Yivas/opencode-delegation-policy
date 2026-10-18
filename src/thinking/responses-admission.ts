@@ -1,3 +1,4 @@
+import { declaredBodyModelMatches } from "./model-identity.js";
 import type {
   ThinkingLevel,
   ThinkingModel,
@@ -913,6 +914,9 @@ export function admitResponsesVariant(
   const identity = readIdentity(model);
   if (identity.kind === "outside-scope") return identity;
   if (identity.kind !== "resolved") return { kind: "unresolved" };
+  if (!declaredBodyModelMatches(model, variant, identity.wireModelID)) {
+    return { kind: "unresolved" };
+  }
 
   if (
     identity.provider === "github-copilot" &&
@@ -1071,6 +1075,7 @@ type Identity =
       readonly kind: "resolved";
       readonly provider: ResponsesProvider;
       readonly modelID: string;
+      readonly wireModelID: string;
       readonly route: ResponsesRoute;
     };
 
@@ -1147,6 +1152,7 @@ function readIdentity(model: ThinkingModel): Identity {
         kind: "resolved",
         provider: providerID,
         modelID: sourceModelID,
+        wireModelID: sourceModelID,
         route,
       };
     }
@@ -1154,6 +1160,7 @@ function readIdentity(model: ThinkingModel): Identity {
       kind: "resolved",
       provider: providerID as ResponsesProvider,
       modelID: effectiveID,
+      wireModelID: effectiveID,
       route,
     };
   } catch {

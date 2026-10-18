@@ -1,4 +1,5 @@
 import { MISTRAL_CATALOGUE, MISTRAL_SOURCE_SCOPE } from "./mistral.js";
+import { declaredBodyModelMatches } from "./model-identity.js";
 import type {
   ThinkingLevel,
   ThinkingModel,
@@ -57,6 +58,9 @@ export function admitMistralVariant(
       (candidate) => candidate.protocolModelID === identity.modelID,
     );
     if (row === undefined) return { kind: "outside-scope" };
+    if (!declaredBodyModelMatches(model, variant, identity.modelID)) {
+      return { kind: "unresolved" };
+    }
 
     const controls = effectiveControls(model, variant);
     if (controls === undefined) {

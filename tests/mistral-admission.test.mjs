@@ -374,6 +374,113 @@ test("off is admitted only when merged settings and body omit both native contro
   }
 });
 
+test("a declared body model cannot override the matched Mistral wire model identity", () => {
+  const candidate = controlVariant("high", "reasoning_effort", "high", {
+    body: { model: "mistral-unlisted-future" },
+  });
+  const result = selectThinkingVariant(
+    model("mistral-small-latest", { variants: [candidate] }),
+    fixed("high"),
+    candidate,
+  );
+  assert.deepEqual(result, {
+    ok: false,
+    code: "thinking-identity-unresolved",
+  });
+  const knownConflict = controlVariant(
+    "known-conflict",
+    "reasoning_effort",
+    "high",
+    {
+      body: { model: "mistral-medium-latest" },
+    },
+  );
+  assert.deepEqual(
+    selectThinkingVariant(
+      model("mistral-small-latest"),
+      fixed("high"),
+      knownConflict,
+    ),
+    { ok: false, code: "thinking-identity-unresolved" },
+    "a different known Mistral row cannot replace the declared wire model",
+  );
+
+  const matching = controlVariant("matching", "reasoning_effort", "high");
+  const variants = [
+    matching,
+    controlVariant("contradictory", "reasoning_effort", "high", {
+      body: { model: "mistral-unlisted-future" },
+    }),
+  ];
+  assert.deepEqual(
+    selectThinkingVariant(
+      model("mistral-small-latest", { variants }),
+      fixed("high"),
+      undefined,
+    ),
+    { ok: false, code: "thinking-identity-unresolved" },
+    "a valid catalogue candidate cannot hide another candidate's identity conflict",
+  );
+});
+
+test("Mistral body model comparison preserves undefined overlays and rejects unsafe identity data", () => {
+  const base = model("mistral-small-latest", {
+    body: { model: "mistral-unlisted-future" },
+  });
+  const inherited = controlVariant("high", "reasoning_effort", "high", {
+    body: { model: undefined },
+  });
+  assert.deepEqual(
+    selectThinkingVariant(
+      { ...base, variants: [inherited] },
+      fixed("high"),
+      inherited,
+    ),
+    { ok: false, code: "thinking-identity-unresolved" },
+  );
+
+  const matching = controlVariant("high", "reasoning_effort", "high", {
+    body: { model: "mistral-small-latest" },
+  });
+  assert.equal(
+    selectThinkingVariant(
+      model("mistral-small-latest"),
+      fixed("high"),
+      matching,
+    ).ok,
+    true,
+  );
+
+  for (const value of [null, 42, [], {}]) {
+    const malformed = controlVariant("malformed", "reasoning_effort", "high", {
+      body: { model: value },
+    });
+    assert.deepEqual(
+      selectThinkingVariant(
+        model("mistral-small-latest"),
+        fixed("high"),
+        malformed,
+      ),
+      { ok: false, code: "thinking-identity-unresolved" },
+    );
+  }
+
+  let getterReads = 0;
+  const body = {};
+  Object.defineProperty(body, "model", {
+    get() {
+      getterReads += 1;
+      return "mistral-small-latest";
+    },
+  });
+  const unsafe = controlVariant("unsafe", "reasoning_effort", "high", { body });
+  assert.deepEqual(
+    selectThinkingVariant(model("mistral-small-latest"), fixed("high"), unsafe),
+    { ok: false, code: "thinking-identity-unresolved" },
+  );
+  assert.equal(getterReads, 0);
+});
+
 test("unrelated headers, settings, body, cap and credential-like fields remain unread or unchanged", () => {
   let credentialReads = 0;
   let outputReads = 0;
