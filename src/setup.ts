@@ -10,6 +10,7 @@ import {
   type AdvisorSafetyIssue,
   type EffectiveAgent,
   advisorSafetyIssues,
+  orphanAgentIDs,
 } from "./agents/safety.js";
 import { PreferenceStore } from "./state/store.js";
 import {
@@ -31,13 +32,18 @@ export type HostPorts = {
 export type Wiring = {
   readonly store: PreferenceStore;
   // Registers the agents described by the global defaults and keeps the transform handle. An axis
-  // in error registers nothing at all: deleting the agents because a preference is temporarily
-  // unreadable would take away what the user configured.
+  // in error keeps its previous agents instead of taking them away.
   register(): Promise<void>;
-  // Reads the effective agents after the host applied its own configuration and reports an advisor
-  // that stopped being advice-only. The caller decides what to do with the result.
-  advisorSafety(): Promise<readonly AdvisorSafetyIssue[]>;
+  // Reads the effective agents after the host applied its own configuration. Reports an advisor that
+  // stopped being advice-only and any agent under the plugin's prefix that the current configuration
+  // no longer defines. The caller decides what to do with each result.
+  inspect(): Promise<AgentInspection>;
   dispose(): Promise<void>;
+};
+
+export type AgentInspection = {
+  readonly advisors: readonly AdvisorSafetyIssue[];
+  readonly orphans: readonly string[];
 };
 
 export function createWiring(ports: HostPorts): Wiring {
@@ -77,13 +83,23 @@ export function createWiring(ports: HostPorts): Wiring {
       });
     },
 
-    async advisorSafety() {
-      if (advisorDefinitions.length === 0) return [];
+    async inspect() {
+      const definitions = [...roleDefinitions, ...advisorDefinitions];
       const listed = await ports.agentList();
-      return advisorSafetyIssues({
-        definitions: advisorDefinitions,
-        effective: effectiveAgents(listed),
-      });
+      const effective = effectiveAgents(listed);
+      return {
+        advisors:
+          advisorDefinitions.length === 0
+            ? []
+            : advisorSafetyIssues({
+                definitions: advisorDefinitions,
+                effective,
+              }),
+        orphans:
+          definitions.length === 0
+            ? []
+            : orphanAgentIDs({ definitions, effective }),
+      };
     },
 
     async dispose() {

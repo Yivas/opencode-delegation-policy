@@ -216,7 +216,7 @@ test("advisor safety reports an allow the host config appended", async () => {
 
   await wiring.register();
 
-  assert.deepEqual(await wiring.advisorSafety(), [
+  assert.deepEqual((await wiring.inspect()).advisors, [
     { kind: "actions-not-denied", id: "ocv2-advisor-1", actions: ["shell"] },
   ]);
 });
@@ -236,7 +236,7 @@ test("advisor safety is empty before registering and after a clean registration"
     agentList: async () => listed,
   });
 
-  assert.deepEqual(await wiring.advisorSafety(), []);
+  assert.deepEqual((await wiring.inspect()).advisors, []);
 
   await wiring.register();
   listed = {
@@ -248,7 +248,7 @@ test("advisor safety is empty before registering and after a clean registration"
     ],
   };
 
-  assert.deepEqual(await wiring.advisorSafety(), []);
+  assert.deepEqual((await wiring.inspect()).advisors, []);
 });
 
 test("an advisor missing from the effective catalog is reported", async () => {
@@ -266,7 +266,7 @@ test("an advisor missing from the effective catalog is reported", async () => {
 
   await wiring.register();
 
-  assert.deepEqual(await wiring.advisorSafety(), [
+  assert.deepEqual((await wiring.inspect()).advisors, [
     { kind: "unregistered", id: "ocv2-advisor-1" },
   ]);
 });
@@ -286,9 +286,36 @@ test("a malformed catalogue listing leaves advisor safety without effective agen
 
   await wiring.register();
 
-  assert.deepEqual(await wiring.advisorSafety(), [
+  assert.deepEqual((await wiring.inspect()).advisors, [
     { kind: "unregistered", id: "ocv2-advisor-1" },
   ]);
+});
+
+test("an agent under the plugin's prefix that the configuration no longer defines is reported as an orphan", async () => {
+  const records = new Map();
+  storagedefaults(records, defaults());
+  const wiring = createWiring({
+    storage: storageDouble(records),
+    catalog: catalogDouble([
+      model("acme", "small-model"),
+      model("acme", "advisor-model"),
+    ]),
+    agentTransform: async () => ({ dispose: async () => {} }),
+    agentList: async () => ({
+      data: [
+        { id: "ocv2-small", permissions: [] },
+        { id: "ocv2-advisor-1", permissions: [] },
+        // Left over from an earlier run, or a role/advisor the configuration dropped.
+        { id: "ocv2-advisor-2", permissions: [] },
+        // Not ours: the plugin claims only its exact ids.
+        { id: "my-own-agent", permissions: [] },
+      ],
+    }),
+  });
+
+  await wiring.register();
+
+  assert.deepEqual((await wiring.inspect()).orphans, ["ocv2-advisor-2"]);
 });
 
 test("registering again after a configuration change updates the registered agents", async () => {

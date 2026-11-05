@@ -1,5 +1,6 @@
 import {
   ADVISOR_DENIED_ACTIONS,
+  AGENT_PREFIX,
   type AgentPermission,
   isAdvisorAgentID,
 } from "./ids.js";
@@ -51,6 +52,21 @@ export function advisorSafetyIssues(input: {
     }
   }
   return issues;
+}
+
+// Agents under the plugin's prefix that the current configuration no longer defines. They stay
+// launchable because the plugin only removes what it created in the same run, and after a reload it
+// cannot prove ownership. They are reported, never deleted: the prefix is the only evidence and a
+// deletion on a guess would take away an agent that might not be ours.
+export function orphanAgentIDs(input: {
+  readonly definitions: readonly AgentDefinition[];
+  readonly effective: readonly EffectiveAgent[];
+}): readonly string[] {
+  const defined = new Set(input.definitions.map((definition) => definition.id));
+  return input.effective
+    .map((agent) => agent.id)
+    .filter((id) => id.startsWith(AGENT_PREFIX) && !defined.has(id))
+    .sort();
 }
 
 // Which actions are not closed once the documented matcher runs. For one action, a rule with the
