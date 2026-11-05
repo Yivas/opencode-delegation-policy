@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin";
 
 import type { RoleKey } from "../state/schema.js";
+import { MAX_ADVISORS } from "../state/schema.js";
 import type { AdvisorSelection, RoleSelection } from "../validation/models.js";
 import {
   ADVISOR_DENIED_ACTIONS,
@@ -47,7 +48,7 @@ export type AgentDefinition = {
   readonly description: string;
   readonly system: string;
   readonly mode: "subagent";
-  readonly model: AgentModel;
+  readonly model?: AgentModel;
   readonly permissions?: readonly AgentPermission[];
 };
 
@@ -86,30 +87,49 @@ const ROLE_SYSTEM =
 const ADVISOR_SYSTEM =
   "Provide advice only within the delegated question. Do not execute actions, use tools or claim to have performed them. Name missing evidence and material risks, and answer briefly.";
 
+// Every reserved id can be registered whether or not the global configuration uses it. A session may
+// enable a role or add an advisor that the defaults do not have, and a launch needs an agent to
+// exist; an agent without a model inherits the caller's, and the launch passes the exact one. The
+// advisor slots always carry the deny list, used or not.
 export function agentDefinitions(input: {
   readonly roles: readonly RoleSelection[];
   readonly advisors: readonly AdvisorSelection[];
+  readonly slots?: boolean;
 }): readonly AgentDefinition[] {
   const definitions: AgentDefinition[] = [];
-  for (const selection of input.roles) {
-    const { id, name } = ROLE_AGENTS[selection.role];
+  const roleByKey = new Map(
+    input.roles.map((selection) => [selection.role, selection]),
+  );
+  const advisorByNumber = new Map(
+    input.advisors.map((selection) => [selection.advisor, selection]),
+  );
+  const roleKeys = input.slots
+    ? (Object.keys(ROLE_AGENTS) as RoleKey[])
+    : [...roleByKey.keys()];
+  for (const key of roleKeys) {
+    const { id, name } = ROLE_AGENTS[key];
+    const selection = roleByKey.get(key);
     definitions.push({
       id,
       name,
       description: `OpenCode delegation role: ${name}.`,
       system: ROLE_SYSTEM,
       mode: "subagent",
-      model: selectionModel(selection),
+      ...(selection === undefined ? {} : { model: selectionModel(selection) }),
     });
   }
-  for (const selection of input.advisors) {
+  const advisorNumbers = input.slots
+    ? Array.from({ length: MAX_ADVISORS }, (_, index) => index + 1)
+    : [...advisorByNumber.keys()];
+  for (const number of advisorNumbers) {
+    const selection = advisorByNumber.get(number);
     definitions.push({
-      id: advisorAgentID(selection.advisor),
-      name: `Advisor ${selection.advisor}`,
-      description: `OpenCode delegation advisor ${selection.advisor}: bounded advice, no actions.`,
+      id: advisorAgentID(number),
+      name: `Advisor ${number}`,
+      description: `OpenCode delegation advisor ${number}: bounded advice, no actions.`,
       system: ADVISOR_SYSTEM,
       mode: "subagent",
-      model: selection.launchModel,
+      ...(selection === undefined ? {} : { model: selection.launchModel }),
       permissions: DENY_EVERYTHING,
     });
   }
@@ -150,9 +170,11 @@ export function applyDefinition(
   agent.mode = definition.mode;
   agent.hidden = false;
   // Copied, not shared: the definition's model can be the same object held in validation output.
-  agent.model = {
-    ...definition.model,
-  } as unknown as WritableAgent["model"];
+  // A slot without a model keeps the caller's, which is what an unused slot should inherit.
+  agent.model =
+    definition.model === undefined
+      ? undefined
+      : ({ ...definition.model } as unknown as WritableAgent["model"]);
   if (definition.permissions !== undefined) {
     agent.permissions = [...definition.permissions];
   }

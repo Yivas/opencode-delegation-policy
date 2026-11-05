@@ -14,8 +14,10 @@ import {
 } from "./agents/safety.js";
 import { PreferenceStore } from "./state/store.js";
 import {
+  type AdvisorSelection,
   type DelegationValidation,
   type ModelCatalog,
+  type RoleSelection,
   validatePreferenceAxes,
 } from "./validation/models.js";
 
@@ -49,11 +51,19 @@ export type AgentInspection = {
 export function createWiring(ports: HostPorts): Wiring {
   const store = new PreferenceStore(ports.storage);
   const created = new Set<string>();
-  // Kept per axis: an axis that cannot be validated keeps its previous agents instead of taking them
-  // away, and the other axis still registers normally.
-  let roleDefinitions: readonly AgentDefinition[] = [];
-  let advisorDefinitions: readonly AgentDefinition[] = [];
+  // The selections the last successful pass saw, per axis. An axis that cannot be validated keeps
+  // them instead of taking its agents away, and the other axis still registers normally.
+  let roleSelections: readonly RoleSelection[] = [];
+  let advisorSelections: readonly AdvisorSelection[] = [];
   let registration: { dispose(): Promise<void> } | undefined;
+  let registered = false;
+
+  const definitions = (): readonly AgentDefinition[] =>
+    agentDefinitions({
+      roles: roleSelections,
+      advisors: advisorSelections,
+      slots: true,
+    });
 
   return {
     store,
@@ -61,84 +71,61 @@ export function createWiring(ports: HostPorts): Wiring {
     async register() {
       // Agent registration happens once per host, so it reflects the global defaults. A session
       // override changes the model a launch passes, not the registered agent.
-      const { preferences } = await store.readGlobal();
-      const validation = await validatePreferenceAxes({
-        preferences,
-        catalog: ports.catalog,
-      });
-      const next = definitionsFor(validation, {
-        roles: roleDefinitions,
-        advisors: advisorDefinitions,
-      });
-      roleDefinitions = next.roles;
-      advisorDefinitions = next.advisors;
-      // The callback reads the current lists on every pass. Closing over a snapshot here would keep
-      // the host rebuilding agents from the first configuration it ever saw.
+      let validation: DelegationValidation;
+      try {
+        const { preferences } = await store.readGlobal();
+        validation = await validatePreferenceAxes({
+          preferences,
+          catalog: ports.catalog,
+        });
+      } catch {
+        // A preference document that cannot be read must not stop the plugin from loading; the
+        // agents it already has stay as they are until the next pass.
+        return;
+      }
+      if (validation.delegation.status !== "error") {
+        roleSelections =
+          validation.delegation.status === "active"
+            ? validation.delegation.roles
+            : [];
+      }
+      if (validation.advisor.status !== "error") {
+        advisorSelections =
+          validation.advisor.status === "off"
+            ? []
+            : validation.advisor.advisors;
+      }
+      // The callback reads the current definitions on every pass. Closing over a snapshot here would
+      // keep the host rebuilding agents from the first configuration it ever saw.
       registration ??= await ports.agentTransform((editor) => {
         registerAgentDefinitions({
           editor,
-          definitions: [...roleDefinitions, ...advisorDefinitions],
+          definitions: definitions(),
           created,
         });
       });
+      registered = true;
     },
 
     async inspect() {
-      const definitions = [...roleDefinitions, ...advisorDefinitions];
+      // Before the plugin registered anything there is nothing to compare against: the host cannot
+      // have our agents yet, and reporting every slot as missing would be noise.
+      if (!registered) return { advisors: [], orphans: [] };
+      const current = definitions();
       const listed = await ports.agentList();
       const effective = effectiveAgents(listed);
       return {
-        advisors:
-          advisorDefinitions.length === 0
-            ? []
-            : advisorSafetyIssues({
-                definitions: advisorDefinitions,
-                effective,
-              }),
-        orphans:
-          definitions.length === 0
-            ? []
-            : orphanAgentIDs({ definitions, effective }),
+        advisors: advisorSafetyIssues({ definitions: current, effective }),
+        orphans: orphanAgentIDs({ definitions: current, effective }),
       };
     },
 
     async dispose() {
       await registration?.dispose();
       registration = undefined;
+      registered = false;
     },
   };
-}
-
-// An axis in error keeps the definitions it had: its agents are neither replaced nor removed, while
-// the other axis is still registered. A role with a broken model must not take the rest away.
-function definitionsFor(
-  validation: DelegationValidation,
-  previous: {
-    readonly roles: readonly AgentDefinition[];
-    readonly advisors: readonly AgentDefinition[];
-  },
-): { roles: readonly AgentDefinition[]; advisors: readonly AgentDefinition[] } {
-  const roles =
-    validation.delegation.status === "error"
-      ? previous.roles
-      : agentDefinitions({
-          roles:
-            validation.delegation.status === "active"
-              ? validation.delegation.roles
-              : [],
-          advisors: [],
-        });
-  const advisors =
-    validation.advisor.status === "error"
-      ? previous.advisors
-      : agentDefinitions({
-          roles: [],
-          advisors:
-            validation.advisor.status === "off"
-              ? []
-              : validation.advisor.advisors,
-        });
-  return { roles, advisors };
 }
 
 // The host returns its own records; only the fields the check reads are taken, and an entry without
