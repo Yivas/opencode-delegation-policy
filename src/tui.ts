@@ -42,7 +42,10 @@ export function describeRpcFailure(error: unknown): string {
 
 // A JSON-schema output reaches the client as `unknown`, so the reply is checked where it arrives.
 type DelegateRpc = (definition: typeof delegateRpc) => {
-  readonly run: (input: { line: string }) => Promise<unknown>;
+  readonly run: (input: {
+    line: string;
+    sessionID?: string;
+  }) => Promise<unknown>;
 };
 
 function replyText(answer: unknown): string | undefined {
@@ -53,6 +56,9 @@ function replyText(answer: unknown): string | undefined {
 
 export type DelegateTuiPorts = {
   readonly rpc: DelegateRpc;
+  // The session the person is looking at, if any. Session commands act on it; without one, they are
+  // refused by the server and only the defaults can change.
+  readonly sessionID: () => string | undefined;
   readonly alert: (options: {
     title: string;
     message: string;
@@ -66,7 +72,11 @@ export async function runDelegateInTui(
 ): Promise<void> {
   let message: string;
   try {
-    const answer = await ports.rpc(delegateRpc).run({ line: input ?? "" });
+    const sessionID = ports.sessionID();
+    const answer = await ports.rpc(delegateRpc).run({
+      line: input ?? "",
+      ...(sessionID === undefined ? {} : { sessionID }),
+    });
     // A reply without text would otherwise show an empty dialog that looks like a success.
     message =
       replyText(answer) ?? describeRpcFailure({ type: "rpc.invalid_output" });
@@ -83,7 +93,7 @@ const plugin: Plugin.Definition = {
       commands: [
         {
           id: "opencode-delegation-policy.delegate",
-          title: "Delegation defaults",
+          title: "Delegation settings",
           group: "Delegation",
           // Keeps the typed line in the prompt and hands it to `run` raw.
           slash: { name: "delegate", arguments: true },
@@ -91,6 +101,10 @@ const plugin: Plugin.Definition = {
             runDelegateInTui(input, {
               rpc: (definition) => context.client.rpc(definition),
               alert: (options) => context.ui.dialog.alert(options),
+              sessionID: () => {
+                const route = context.ui.router.current();
+                return route.type === "session" ? route.sessionID : undefined;
+              },
             }),
         },
       ],

@@ -335,10 +335,10 @@ test("the server answers the TUI's request with the command's report", async () 
   await delegationPolicy.setup(context);
   const { handlers } = state.rpcs[0];
 
-  const saved = await handlers.run({ line: "intensity normal" });
+  const saved = await handlers.run({ line: "defaults intensity normal" });
   const status = await handlers.run({ line: "" });
 
-  assert.match(saved.text, /Saved\./);
+  assert.match(saved.text, /Defaults saved\./);
   assert.match(saved.text, /Intensity: normal/);
   // Registration already ran before the request, so the status reports a real agent check.
   assert.match(status.text, /Agent check: nothing to report/);
@@ -383,10 +383,10 @@ test("defaults saved through /delegate reach the next request of the main agent"
   assert.equal(before.system.length, 1);
 
   for (const line of [
-    "intensity normal",
-    "role small anthropic/claude-sonnet-4-5",
-    "role medium off",
-    "role large off",
+    "defaults intensity normal",
+    "defaults role small anthropic/claude-sonnet-4-5",
+    "defaults role medium off",
+    "defaults role large off",
   ]) {
     await handlers.run({ line });
   }
@@ -399,4 +399,10 @@ test("defaults saved through /delegate reach the next request of the main agent"
     (await handlers.run({ line: "" })).text,
     /latest request carried the delegation policy/,
   );
+
+  // A session command from the TUI changes that session only; the next request there follows it.
+  await handlers.run({ line: "orchestrator", sessionID: "root" });
+  const session = request();
+  await callback(session);
+  assert.match(session.system[1].text, /Intensity: orchestrator\./);
 });

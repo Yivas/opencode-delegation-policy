@@ -5,16 +5,19 @@ import type { Rpc } from "@opencode/plugin/rpc";
 // literal checked against the host type, so the emitted module imports nothing at runtime;
 // `Rpc.define` would only add a check of reserved error names this contract does not use.
 //
-// Temporary on purpose: one method that forwards the raw `/delegate` line and returns the text to
-// show. The full selector replaces it with real methods; this only keeps the minimal command
-// visible to the person who ran it.
+// Temporary on purpose: one method that forwards the raw `/delegate` line, with the session the TUI
+// has open when there is one, and returns the text to show. The full selector replaces it with real
+// methods; this only keeps the command visible to the person who ran it.
 export const delegateRpc = {
   id: "opencode-delegation-policy-delegate",
   methods: {
     run: {
       input: {
         type: "object",
-        properties: { line: { type: "string" } },
+        properties: {
+          line: { type: "string" },
+          sessionID: { type: "string" },
+        },
         required: ["line"],
         additionalProperties: false,
       },

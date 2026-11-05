@@ -39,6 +39,12 @@ const delegationPolicy: Plugin.Plugin = {
       catalog: context.model,
       inspect: () => wiring.inspect(),
       injection: () => injector.last(),
+      // A lookup that fails is read as "gone": nothing is written for a session the host cannot find.
+      sessionExists: (sessionID: string) =>
+        context.session.get({ sessionID }).then(
+          () => true,
+          () => false,
+        ),
     };
     let rpcRegistration: { dispose: () => Promise<void> } | undefined;
     let hookRegistration: { dispose: () => Promise<void> } | undefined;
@@ -81,12 +87,19 @@ const delegationPolicy: Plugin.Plugin = {
         run: async (input) => {
           // The host checks the input against the contract before this runs, so anything else is a
           // defect and fails loudly instead of being read as an empty command.
-          const line = (input as { line?: unknown } | null)?.line;
+          const { line, sessionID } = (input ?? {}) as {
+            line?: unknown;
+            sessionID?: unknown;
+          };
           if (typeof line !== "string") {
             throw new TypeError("the delegate request carries no line");
           }
           return {
-            text: await runDelegate(delegateArguments(line), delegatePorts),
+            text: await runDelegate(delegateArguments(line), delegatePorts, {
+              ...(typeof sessionID === "string" && sessionID !== ""
+                ? { sessionID }
+                : {}),
+            }),
           };
         },
       });

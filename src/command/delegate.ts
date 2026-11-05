@@ -1,15 +1,18 @@
 import type { InjectionReport } from "../policy/inject.js";
 import type { AgentInspection } from "../setup.js";
-import type { PreferenceView } from "../state/effective.js";
+import type { PreferenceSource, PreferenceView } from "../state/effective.js";
 import {
   ADVISOR_MODES,
   type GlobalPreferenceChange,
   INTENSITIES,
   MAX_ADVISORS,
+  PREFERENCES,
   PreferenceStateError,
   ROLE_KEYS,
   type RoleKey,
   type RoleSetting,
+  type SessionPreferenceChange,
+  type ThinkingSetting,
 } from "../state/schema.js";
 import type { PreferenceStore } from "../state/store.js";
 import {
@@ -18,14 +21,27 @@ import {
   validatePreferenceAxes,
 } from "../validation/models.js";
 
-// The smallest way to set the defaults from inside OpenCode, ahead of the full selector. It writes
-// only the global document: agents are created once when the host starts and cannot follow a session,
-// so a value that lives only in a session would have no agent to launch. Thinking levels are not
-// configurable here; a role runs at whatever its model does by default until that part is built.
+// `/delegate`, with Pi's split between the session and the defaults: the bare commands change the
+// session that is open, and the defaults change only through `/delegate defaults ...`, so saving them
+// is never a side effect of a session change. A session can change intensity, Advisor mode and
+// preference. It cannot change which models the roles and Advisors use: agents are created once
+// when OpenCode starts, from the defaults, and nothing has shown that a launch honours a model the
+// agent was not created with. Thinking is set in the defaults; the full selector replaces this text.
 
 export type DelegateCommandPorts = {
-  readonly store: Pick<PreferenceStore, "readGlobal" | "saveDefaults">;
+  readonly store: Pick<
+    PreferenceStore,
+    | "readGlobal"
+    | "readSession"
+    | "saveDefaults"
+    | "applySession"
+    | "resetSession"
+    | "clearSession"
+  >;
   readonly catalog: ModelCatalog;
+  // Confirms that a session the TUI named exists before anything is written for it: the TUI's view
+  // can be stale, and an override for a session that is gone would be left behind for nothing.
+  readonly sessionExists?: (sessionID: string) => Promise<boolean>;
   // The check of the agents the host actually ended up with. Without it the status has nothing to
   // say about them, and says so instead of looking clean.
   readonly inspect?: () => Promise<AgentInspection>;
@@ -49,17 +65,31 @@ function roleKeyFor(name: string | undefined): RoleKey | undefined {
   return ROLE_KEYS.find((key) => ROLE_NAMES[key] === name);
 }
 
+const ROLE_LIST = ROLE_KEYS.map((key) => ROLE_NAMES[key]).join("|");
+
 const USAGE = [
-  "Usage:",
-  "  /delegate [status]                     show the saved defaults and whether they work",
-  "  /delegate help                         show this text",
-  `  /delegate intensity <${INTENSITIES.join("|")}>`,
-  `  /delegate advisor-mode <${ADVISOR_MODES.join("|")}>`,
-  `  /delegate role <${ROLE_KEYS.map((key) => ROLE_NAMES[key]).join("|")}> <provider/model[#variant]|off|unset>`,
-  `  /delegate advisors <off|unset|provider/model[#variant] ...>   up to ${MAX_ADVISORS} models`,
+  "Usage, for the session that is open:",
+  "  /delegate [status]                       show the settings and whether they work",
+  `  /delegate <${INTENSITIES.join("|")}>      set this session's intensity`,
+  `  /delegate advisor <${ADVISOR_MODES.join("|")}>`,
+  `  /delegate preference <${PREFERENCES.join("|")}>`,
+  "  /delegate reset                          turn this session's delegation and Advisor off",
+  "  /delegate clear                          drop this session's changes and follow the defaults",
   "",
-  "Agents are created when OpenCode starts, so a change takes effect after you restart it.",
+  "Usage, for the defaults of every session:",
+  `  /delegate defaults <intensity|advisor-mode|preference> <value>`,
+  `  /delegate defaults role <${ROLE_LIST}> <provider/model[#variant]|off|unset>`,
+  `  /delegate defaults thinking <${ROLE_LIST}> <level|from..to|unset>`,
+  `  /delegate defaults advisors <off|unset|provider/model[#variant] ...>   up to ${MAX_ADVISORS}`,
+  "",
+  "  /delegate help                           show this text",
+  "",
+  "Session settings are saved and survive a restart. Agents are created when OpenCode starts, from",
+  "the defaults, so a change to roles, Advisors or thinking takes effect after a restart.",
 ].join("\n");
+
+const NO_SESSION =
+  "Open a session first: this changes the session that is open. To change the defaults of every session, use /delegate defaults ...";
 
 // Whatever follows the command name. The host may pass the whole line or only the arguments, so a
 // leading "/delegate" is dropped rather than assumed present.
@@ -73,95 +103,176 @@ export function delegateArguments(text: string): string {
   return trimmed;
 }
 
+type Request =
+  | { readonly kind: "status" }
+  | { readonly kind: "help" }
+  | { readonly kind: "defaults"; readonly change: GlobalPreferenceChange }
+  | { readonly kind: "session"; readonly change: SessionPreferenceChange }
+  | { readonly kind: "reset" }
+  | { readonly kind: "clear" };
+
 export async function runDelegate(
   line: string,
   ports: DelegateCommandPorts,
+  scope: { readonly sessionID?: string } = {},
 ): Promise<string> {
-  const words = line.trim().split(/\s+/).filter(Boolean);
-  const [subcommand, ...rest] = words;
+  const request = parseRequest(line);
+  if (typeof request === "string") return `${request}\n\n${USAGE}`;
+  if (request.kind === "help") return USAGE;
 
-  if (subcommand === undefined || subcommand === "status") {
-    try {
-      return await report(await ports.store.readGlobal(), ports, undefined);
-    } catch (error) {
-      // The same document that would be refused on save has to be explained on read: a command whose
-      // whole job is the report cannot answer with a raw rejection. The store's messages carry no
-      // stored value. Anything else is a defect and surfaces as one.
-      if (error instanceof PreferenceStateError) {
-        return `The saved defaults cannot be read: ${error.message}`;
-      }
-      throw error;
-    }
-  }
-  if (subcommand === "help") return USAGE;
-
-  const change = parseChange(subcommand, rest);
-  if (typeof change === "string") return `${change}\n\n${USAGE}`;
-
+  const sessionID = scope.sessionID;
   try {
-    const view = await ports.store.saveDefaults(change);
-    return await report(view, ports, "Saved.");
+    switch (request.kind) {
+      case "status":
+        return sessionID === undefined
+          ? await report(
+              await ports.store.readGlobal(),
+              ports,
+              "No session is open; these are the defaults.",
+            )
+          : await report(
+              await ports.store.readSession(sessionID),
+              ports,
+              "This session:",
+            );
+      case "defaults":
+        return await report(
+          await ports.store.saveDefaults(request.change),
+          ports,
+          "Defaults saved.",
+        );
+      default: {
+        if (sessionID === undefined) return NO_SESSION;
+        if (
+          ports.sessionExists !== undefined &&
+          !(await ports.sessionExists(sessionID))
+        ) {
+          return "That session no longer exists; nothing was changed.";
+        }
+        const view =
+          request.kind === "reset"
+            ? await ports.store.resetSession(sessionID)
+            : request.kind === "clear"
+              ? await ports.store.clearSession(sessionID)
+              : await ports.store.applySession(sessionID, request.change);
+        return await report(view, ports, "This session, saved:");
+      }
+    }
   } catch (error) {
     if (error instanceof PreferenceStateError) {
       // A write that rejected may still have landed, and the store says so; "Not saved" would
-      // contradict it.
-      return error.persistence === "unknown"
-        ? `Could not confirm the save: ${error.message}`
+      // contradict it. The store's messages carry no stored value. Anything else is a defect and
+      // surfaces as one.
+      if (error.persistence === "unknown") {
+        return `Could not confirm the save: ${error.message}`;
+      }
+      return request.kind === "status"
+        ? `The saved settings cannot be read: ${error.message}`
         : `Not saved: ${error.message}`;
     }
     throw error;
   }
 }
 
-// Returns the change to save, or the reason the input cannot be understood.
-function parseChange(
-  subcommand: string,
+// Returns what to do, or the reason the input cannot be understood. Nothing is written for input
+// that is not understood.
+function parseRequest(line: string): Request | string {
+  const [first, ...rest] = line.trim().split(/\s+/).filter(Boolean);
+  if (first === undefined || (first === "status" && rest.length === 0)) {
+    return { kind: "status" };
+  }
+  if (first === "help" && rest.length === 0) return { kind: "help" };
+  if (first === "reset" && rest.length === 0) return { kind: "reset" };
+  if (first === "clear" && rest.length === 0) return { kind: "clear" };
+  if (isOneOf(INTENSITIES, first) && rest.length === 0) {
+    return { kind: "session", change: { intensity: first } };
+  }
+  if (first === "advisor") {
+    const [mode, ...extra] = rest;
+    if (!isOneOf(ADVISOR_MODES, mode) || extra.length > 0) {
+      return `advisor takes one of: ${ADVISOR_MODES.join(", ")}.`;
+    }
+    return { kind: "session", change: { advisorMode: mode } };
+  }
+  if (first === "preference") {
+    const [value, ...extra] = rest;
+    if (!isOneOf(PREFERENCES, value) || extra.length > 0) {
+      return `preference takes one of: ${PREFERENCES.join(", ")}.`;
+    }
+    return { kind: "session", change: { preference: value } };
+  }
+  if (first === "defaults") {
+    const [setting, ...values] = rest;
+    if (setting === undefined) return "defaults needs a setting.";
+    const change = parseDefaultsChange(setting, values);
+    return typeof change === "string" ? change : { kind: "defaults", change };
+  }
+  return `Unknown subcommand "${first}".`;
+}
+
+function parseDefaultsChange(
+  setting: string,
   rest: readonly string[],
 ): GlobalPreferenceChange | string {
-  switch (subcommand) {
+  switch (setting) {
     case "intensity": {
       const [value, ...extra] = rest;
       if (!isOneOf(INTENSITIES, value) || extra.length > 0) {
-        return `intensity takes one of: ${INTENSITIES.join(", ")}.`;
+        return `defaults intensity takes one of: ${INTENSITIES.join(", ")}.`;
       }
       return { intensity: value };
     }
     case "advisor-mode": {
       const [value, ...extra] = rest;
       if (!isOneOf(ADVISOR_MODES, value) || extra.length > 0) {
-        return `advisor-mode takes one of: ${ADVISOR_MODES.join(", ")}.`;
+        return `defaults advisor-mode takes one of: ${ADVISOR_MODES.join(", ")}.`;
       }
       return { advisorMode: value };
+    }
+    case "preference": {
+      const [value, ...extra] = rest;
+      if (!isOneOf(PREFERENCES, value) || extra.length > 0) {
+        return `defaults preference takes one of: ${PREFERENCES.join(", ")}.`;
+      }
+      return { preference: value };
     }
     case "role": {
       const [name, value, ...extra] = rest;
       const key = roleKeyFor(name);
       if (key === undefined || value === undefined || extra.length > 0) {
-        return `role takes a name (${ROLE_KEYS.map((role) => ROLE_NAMES[role]).join(", ")}) and a model, off or unset.`;
+        return `defaults role takes a name (${ROLE_LIST}) and a model, off or unset.`;
       }
       return { roles: { [key]: roleSetting(value) } };
+    }
+    case "thinking": {
+      const [name, value, ...extra] = rest;
+      const key = roleKeyFor(name);
+      if (key === undefined || value === undefined || extra.length > 0) {
+        return `defaults thinking takes a name (${ROLE_LIST}) and a level, a range from..to, or unset.`;
+      }
+      return { thinking: { [key]: thinkingSetting(value) } };
     }
     case "advisors": {
       const keyword = rest.find((word) => word === "off" || word === "unset");
       if (keyword !== undefined) {
         // A keyword mixed with models would be saved as a model reference called "off".
         if (rest.length > 1) {
-          return `advisors ${keyword} cannot be combined with models.`;
+          return `defaults advisors ${keyword} cannot be combined with models.`;
         }
         return {
           advisors: { kind: keyword === "off" ? "disabled" : "unset" },
         };
       }
       if (rest.length === 0) {
-        return `advisors takes off, unset or up to ${MAX_ADVISORS} model references.`;
+        return `defaults advisors takes off, unset or up to ${MAX_ADVISORS} model references.`;
       }
       if (rest.length > MAX_ADVISORS) {
-        return `advisors takes at most ${MAX_ADVISORS} models.`;
+        return `defaults advisors takes at most ${MAX_ADVISORS} models.`;
       }
       return { advisors: { kind: "configured", models: [...rest] } };
     }
     default:
-      return `Unknown subcommand "${subcommand}".`;
+      return `Unknown defaults setting "${setting}".`;
   }
 }
 
@@ -171,6 +282,17 @@ function roleSetting(value: string): RoleSetting {
   return { kind: "configured", model: value };
 }
 
+// Whether a level exists is the validator's question, which reports it on the next status; here the
+// text only has to say which shape the user meant.
+function thinkingSetting(value: string): ThinkingSetting {
+  if (value === "unset") return { kind: "unset" };
+  const range = value.split("..");
+  if (range.length === 2 && range[0] !== "" && range[1] !== "") {
+    return { kind: "range", from: range[0] ?? "", to: range[1] ?? "" };
+  }
+  return { kind: "fixed", level: value };
+}
+
 function isOneOf<T extends string>(
   allowed: readonly T[],
   value: string | undefined,
@@ -178,37 +300,52 @@ function isOneOf<T extends string>(
   return value !== undefined && (allowed as readonly string[]).includes(value);
 }
 
+const SOURCE_NAMES: Readonly<Record<PreferenceSource, string>> = {
+  default: "built-in",
+  global: "defaults",
+  session: "session",
+};
+
 async function report(
   view: PreferenceView,
   ports: DelegateCommandPorts,
-  heading: string | undefined,
+  heading: string,
 ): Promise<string> {
-  const { preferences } = view;
-  const lines: string[] = [];
-  if (heading !== undefined) lines.push(heading);
+  const { preferences, provenance } = view;
+  const from = (source: PreferenceSource) => ` (${SOURCE_NAMES[source]})`;
+  const lines: string[] = [heading];
 
   lines.push(
-    `Intensity: ${preferences.intensity}`,
-    `Advisor mode: ${preferences.advisorMode}`,
+    `Intensity: ${preferences.intensity}${from(provenance.intensity)}`,
+    `Advisor mode: ${preferences.advisorMode}${from(provenance.advisorMode)}`,
+    `Preference: ${preferences.preference}${from(provenance.preference)}`,
   );
   for (const key of ROLE_KEYS) {
     lines.push(
-      `Role ${ROLE_NAMES[key]}: ${describeRole(preferences.roles[key])}`,
+      `Role ${ROLE_NAMES[key]}: ${describeRole(preferences.roles[key])}${from(provenance.roles[key])}; thinking ${describeThinking(preferences.thinking[key])}${from(provenance.thinking[key])}`,
     );
   }
-  lines.push(`Advisors: ${describeAdvisors(preferences.advisors)}`);
+  lines.push(
+    `Advisors: ${describeAdvisors(preferences.advisors)}${from(provenance.advisors)}`,
+  );
 
   // Saving a value the catalogue does not offer is allowed (a provider may simply be offline), so
-  // what the saved defaults actually do is reported separately and never hidden. The validator turns
-  // a catalogue failure into its own result; anything it throws is a defect and is not swallowed.
+  // what the settings actually do is reported separately and never hidden. The validator turns a
+  // catalogue failure into its own result; anything it throws is a defect and is not swallowed.
   lines.push(...(await describeValidation(preferences, ports.catalog)));
   lines.push(...(await describeAgents(ports.inspect)));
   lines.push(describeInjection(ports.injection));
   lines.push(
     "",
-    "Agents are created when OpenCode starts; restart it for changes to take effect.",
+    "Agents are created when OpenCode starts, from the defaults; restart it after changing roles, Advisors or thinking.",
   );
   return lines.join("\n");
+}
+
+function describeThinking(setting: ThinkingSetting): string {
+  if (setting.kind === "fixed") return setting.level;
+  if (setting.kind === "range") return `${setting.from}..${setting.to}`;
+  return "not set";
 }
 
 function describeRole(setting: RoleSetting): string {

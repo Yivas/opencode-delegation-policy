@@ -52,16 +52,19 @@ function setup() {
 test("the defaults set from the command are what registration later reads", async () => {
   const { storage, store, ports } = setup();
 
-  await runDelegate("intensity normal", ports);
-  const partial = await runDelegate("role small acme/small-model", ports);
+  await runDelegate("defaults intensity normal", ports);
+  const partial = await runDelegate(
+    "defaults role small acme/small-model",
+    ports,
+  );
   // Until every ordinary role is decided, the report names the ones still missing.
   assert.match(
     partial,
     /role medium: not-configured; role large: not-configured/,
   );
-  await runDelegate("role medium off", ports);
-  await runDelegate("role large off", ports);
-  const text = await runDelegate("advisors acme/advisor-model", ports);
+  await runDelegate("defaults role medium off", ports);
+  await runDelegate("defaults role large off", ports);
+  const text = await runDelegate("defaults advisors acme/advisor-model", ports);
 
   const { preferences } = await store.readGlobal();
   assert.equal(preferences.intensity, "normal");
@@ -110,17 +113,25 @@ test("input the command cannot understand writes nothing", async () => {
   const { storage, ports } = setup();
 
   for (const line of [
-    "intensity loud",
-    "role huge acme/small-model",
-    "role small",
-    "advisors a b c d",
+    "loud",
+    "normal now",
+    "advisor maybe",
+    "preference cheap",
+    "defaults",
+    "defaults intensity loud",
+    "defaults role huge acme/small-model",
+    "defaults role small",
+    "defaults thinking small",
+    "defaults advisors a b c d",
     // A keyword mixed with models would be saved as a model reference called "off".
-    "advisors off acme/small-model",
-    "advisors acme/small-model unset",
+    "defaults advisors off acme/small-model",
+    "defaults advisors acme/small-model unset",
+    // Session model setters do not exist: agents are created from the defaults.
+    "role small acme/small-model",
     "mystery",
   ]) {
-    const text = await runDelegate(line, ports);
-    assert.match(text, /Usage:/, line);
+    const text = await runDelegate(line, ports, { sessionID: "ses" });
+    assert.match(text, /Usage/, line);
   }
 
   assert.equal(storage.records.size, 0);
@@ -130,10 +141,10 @@ test("a model the catalogue does not offer is saved and reported, not hidden", a
   const { ports } = setup();
 
   // Intensity is off by default, so nothing is validated until delegation is on.
-  await runDelegate("intensity normal", ports);
-  const text = await runDelegate("role small acme/nope", ports);
+  await runDelegate("defaults intensity normal", ports);
+  const text = await runDelegate("defaults role small acme/nope", ports);
 
-  assert.match(text, /Saved\./);
+  assert.match(text, /Defaults saved\./);
   assert.match(text, /role small: model-not-found/);
 });
 
@@ -149,8 +160,10 @@ test("the command accepts the whole line or only the arguments", async () => {
 test("role names map to their stored keys and variants pass through", async () => {
   const { store, ports } = setup();
 
-  await runDelegate("role visual-design acme/small-model#high", ports);
-  await runDelegate("advisors off", ports);
+  await runDelegate("defaults role visual-design acme/small-model#high", ports);
+  await runDelegate("defaults advisors off", ports);
+  await runDelegate("defaults thinking small high", ports);
+  await runDelegate("defaults thinking large low..high", ports);
 
   const { preferences } = await store.readGlobal();
   assert.deepEqual(preferences.roles.visualDesign, {
@@ -159,6 +172,15 @@ test("role names map to their stored keys and variants pass through", async () =
   });
   assert.deepEqual(preferences.roles.small, { kind: "unset" });
   assert.deepEqual(preferences.advisors, { kind: "disabled" });
+  assert.deepEqual(preferences.thinking.small, {
+    kind: "fixed",
+    level: "high",
+  });
+  assert.deepEqual(preferences.thinking.large, {
+    kind: "range",
+    from: "low",
+    to: "high",
+  });
 });
 
 test("the arguments are found after any whitespace separator", () => {
@@ -175,9 +197,9 @@ test("an unreadable saved document is explained on read as well as on save", asy
   storage.records.set("preferences.v1.global", "{not json");
 
   const status = await runDelegate("", ports);
-  const save = await runDelegate("intensity normal", ports);
+  const save = await runDelegate("defaults intensity normal", ports);
 
-  assert.match(status, /saved defaults cannot be read/);
+  assert.match(status, /saved settings cannot be read/);
   assert.match(save, /^Not saved:/);
 });
 
@@ -187,7 +209,7 @@ test("a write that may have landed is not reported as not saved", async () => {
     throw new Error("host write failed");
   };
 
-  const text = await runDelegate("intensity normal", ports);
+  const text = await runDelegate("defaults intensity normal", ports);
 
   assert.match(text, /^Could not confirm the save:/);
   assert.doesNotMatch(text, /host write failed/);
@@ -247,4 +269,71 @@ test("the status says what the agent check found, and never stays silent", async
   });
   assert.match(failing, /agent list could not be read/);
   assert.doesNotMatch(failing, /secret/);
+});
+
+test("bare commands change the open session and never the defaults", async () => {
+  const { store, ports } = setup();
+  await runDelegate("defaults intensity normal", ports);
+
+  const text = await runDelegate("orchestrator", ports, { sessionID: "ses" });
+  await runDelegate("advisor on", ports, { sessionID: "ses" });
+  await runDelegate("preference efficient", ports, { sessionID: "ses" });
+
+  const session = await store.readSession("ses");
+  assert.equal(session.preferences.intensity, "orchestrator");
+  assert.equal(session.preferences.advisorMode, "on");
+  assert.equal(session.preferences.preference, "efficient");
+  assert.equal(session.provenance.intensity, "session");
+  const defaults = await store.readGlobal();
+  assert.equal(defaults.preferences.intensity, "normal");
+  assert.equal(defaults.preferences.advisorMode, "with-delegation");
+  // The report says where each value comes from.
+  assert.match(text, /Intensity: orchestrator \(session\)/);
+  // Saving one default writes the whole defaults document, so the rest reads as "defaults".
+  assert.match(text, /Preference: standard \(defaults\)/);
+});
+
+test("reset turns the session off and clear brings back the defaults", async () => {
+  const { store, ports } = setup();
+  await runDelegate("defaults intensity aggressive", ports);
+  await runDelegate("defaults advisor-mode on", ports);
+
+  await runDelegate("reset", ports, { sessionID: "ses" });
+  const reset = await store.readSession("ses");
+  assert.equal(reset.preferences.intensity, "off");
+  assert.equal(reset.preferences.advisorMode, "off");
+
+  await runDelegate("clear", ports, { sessionID: "ses" });
+  const cleared = await store.readSession("ses");
+  assert.equal(cleared.preferences.intensity, "aggressive");
+  assert.equal(cleared.provenance.intensity, "global");
+});
+
+test("a session command without a session, or for one that is gone, writes nothing", async () => {
+  const { storage, ports } = setup();
+
+  const home = await runDelegate("normal", ports);
+  assert.match(home, /Open a session first/);
+
+  const gone = await runDelegate(
+    "normal",
+    { ...ports, sessionExists: async () => false },
+    { sessionID: "old" },
+  );
+  assert.match(gone, /no longer exists; nothing was changed/);
+  assert.equal(storage.records.size, 0);
+});
+
+test("the status without a session shows the defaults, and with one the session", async () => {
+  const { ports } = setup();
+  await runDelegate("aggressive", ports, { sessionID: "ses" });
+
+  assert.match(
+    await runDelegate("", ports),
+    /No session is open; these are the defaults\.\nIntensity: off/,
+  );
+  assert.match(
+    await runDelegate("status", ports, { sessionID: "ses" }),
+    /This session:\nIntensity: aggressive \(session\)/,
+  );
 });

@@ -7,7 +7,7 @@ import tuiPlugin, {
   runDelegateInTui,
 } from "../dist/tui.js";
 
-function ports(run) {
+function ports(run, sessionID = undefined) {
   const alerts = [];
   const requested = [];
   return {
@@ -21,6 +21,7 @@ function ports(run) {
       alert: async (options) => {
         alerts.push(options);
       },
+      sessionID: () => sessionID,
     },
   };
 }
@@ -54,6 +55,22 @@ test("a command typed without arguments still reaches the server", async () => {
   await runDelegateInTui(undefined, doubles);
 
   assert.deepEqual(seen, [{ line: "" }]);
+});
+
+test("the open session travels with the line, and none is sent from home", async () => {
+  const seen = [];
+  const run = async (input) => {
+    seen.push(input);
+    return { text: "ok" };
+  };
+
+  await runDelegateInTui("normal", ports(run, "ses_1").ports);
+  await runDelegateInTui("normal", ports(run).ports);
+
+  assert.deepEqual(seen, [
+    { line: "normal", sessionID: "ses_1" },
+    { line: "normal" },
+  ]);
 });
 
 test("a server that did not answer says nothing was changed, and never claims a save", async () => {
@@ -128,6 +145,7 @@ test("the entry registers /delegate with the raw line and forwards it", async ()
           alerts.push(options);
         },
       },
+      router: { current: () => ({ type: "session", sessionID: "ses_2" }) },
     },
   };
 
@@ -136,9 +154,12 @@ test("the entry registers /delegate with the raw line and forwards it", async ()
 
   const [command] = layers[0]().commands;
   assert.deepEqual(command.slash, { name: "delegate", arguments: true });
-  await command.run("role small acme/small-model");
+  await command.run("aggressive");
 
-  assert.deepEqual(calls[0].input, { line: "role small acme/small-model" });
+  assert.deepEqual(calls[0].input, {
+    line: "aggressive",
+    sessionID: "ses_2",
+  });
   assert.equal(calls[0].definition, delegateRpc);
   assert.equal(alerts[0].message, "ok");
 });
