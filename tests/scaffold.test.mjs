@@ -45,6 +45,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
     agents: new Map(),
     effectiveAgents: [],
     rpcs: [],
+    hooks: [],
   };
 
   const model = {
@@ -141,6 +142,21 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
       };
     },
   };
+  const session = {
+    async hook(name, callback) {
+      if (this !== session) throw new Error("session.hook lost its receiver");
+      const entry = { name, callback };
+      state.hooks.push(entry);
+      return {
+        dispose: async () => {
+          state.hooks = state.hooks.filter((candidate) => candidate !== entry);
+        },
+      };
+    },
+    async get({ sessionID }) {
+      return { id: sessionID };
+    },
+  };
   const rpc = {
     async register(definition, handlers) {
       if (this !== rpc) throw new Error("rpc.register lost its receiver");
@@ -161,6 +177,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
         if (key === "storage") return storage;
         if (key === "agent") return agent;
         if (key === "rpc") return rpc;
+        if (key === "session") return session;
         throw new Error(`unexpected host domain access: ${String(key)}`);
       },
     },
@@ -331,6 +348,20 @@ test("the server answers the TUI's request with the command's report", async () 
 
 test("the server registers no slash command of its own", async () => {
   const { context } = setupContext([eligible()]);
-  // The double throws on any domain it does not model, `command` and `session` included.
+  // The double throws on any domain it does not model, `command` included.
   await delegationPolicy.setup(context);
+});
+
+test("setup hooks the main agent's requests only, and retires the hook", async () => {
+  const { context, state } = setupContext([eligible()]);
+  const cleanup = await delegationPolicy.setup(context);
+
+  // No compaction, title or generate: see src/policy/inject.ts for why.
+  assert.deepEqual(
+    state.hooks.map((hook) => hook.name),
+    ["context"],
+  );
+
+  await cleanup();
+  assert.equal(state.hooks.length, 0);
 });

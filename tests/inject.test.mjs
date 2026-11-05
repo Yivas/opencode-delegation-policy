@@ -1,0 +1,184 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+
+import {
+  createPolicyInjector,
+  replacePolicyBlock,
+} from "../dist/policy/inject.js";
+import { PreferenceStore } from "../dist/state/store.js";
+
+function storageDouble() {
+  const records = new Map();
+  return {
+    records,
+    async get(key) {
+      const text = records.get(key);
+      return text === undefined ? undefined : JSON.parse(text);
+    },
+    async set(key, value) {
+      records.set(key, JSON.stringify(value));
+    },
+    async remove(key) {
+      records.delete(key);
+    },
+  };
+}
+
+const catalog = {
+  async list() {
+    return {
+      location: { directory: "/synthetic" },
+      data: [
+        {
+          id: "small-model",
+          modelID: "small-model",
+          providerID: "acme",
+          name: "small-model",
+          package: "@opencode/ai/providers/groq",
+          enabled: true,
+          limit: { context: 200000, output: 32000 },
+          variants: [],
+        },
+      ],
+    };
+  },
+};
+
+async function activeStore() {
+  const storage = storageDouble();
+  const store = new PreferenceStore(storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    roles: {
+      small: { kind: "configured", model: "acme/small-model" },
+      medium: { kind: "disabled" },
+      large: { kind: "disabled" },
+    },
+  });
+  return { storage, store };
+}
+
+function sessions(parents = {}) {
+  const lookups = [];
+  return {
+    lookups,
+    session: async (sessionID) => {
+      lookups.push(sessionID);
+      if (parents[sessionID] === "fail") throw new Error("host detail");
+      return { parentID: parents[sessionID] };
+    },
+  };
+}
+
+const OTHER = { type: "text", text: "the user's own instructions" };
+
+test("the main agent's request gets exactly one policy block after what was already there", async () => {
+  const { store } = await activeStore();
+  const injector = createPolicyInjector({ store, catalog, ...sessions() });
+  const system = [{ ...OTHER }];
+
+  await injector.apply({ sessionID: "root", agent: "build", system });
+  // A callback that runs again on the same request must not stack a second block.
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  assert.equal(system.length, 2);
+  assert.deepEqual(system[0], OTHER);
+  assert.match(system[1].text, /<delegation_policy>/);
+  assert.deepEqual(injector.last(), { outcome: "injected" });
+});
+
+test("a delegated child and the plugin's own agents never get the policy", async () => {
+  const { store } = await activeStore();
+  const injector = createPolicyInjector({
+    store,
+    catalog,
+    ...sessions({ child: "root" }),
+  });
+
+  const child = [{ ...OTHER }];
+  await injector.apply({ sessionID: "child", agent: "build", system: child });
+  assert.deepEqual(child, [OTHER]);
+  assert.deepEqual(injector.last(), {
+    outcome: "skipped",
+    reason: "child-session",
+  });
+
+  const ownAgent = [];
+  await injector.apply({
+    sessionID: "root",
+    agent: "ocv2-advisor-1",
+    system: ownAgent,
+  });
+  assert.deepEqual(ownAgent, []);
+  assert.deepEqual(injector.last(), {
+    outcome: "skipped",
+    reason: "plugin-agent",
+  });
+});
+
+test("turning delegation off removes the block on the next request and touches nothing else", async () => {
+  const { store } = await activeStore();
+  const injector = createPolicyInjector({ store, catalog, ...sessions() });
+  const system = [{ ...OTHER }];
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  await store.applySession("root", { intensity: "off" });
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  assert.deepEqual(system, [OTHER]);
+  assert.deepEqual(injector.last(), {
+    outcome: "skipped",
+    reason: "nothing-active",
+  });
+});
+
+test("a failure leaves no block, never a stale one, and says which failure it was", async () => {
+  const { storage, store } = await activeStore();
+  const lookups = sessions({ broken: "fail" });
+  const injector = createPolicyInjector({ store, catalog, ...lookups });
+
+  const system = [{ ...OTHER }];
+  await injector.apply({ sessionID: "root", agent: "build", system });
+  assert.equal(system.length, 2);
+
+  storage.records.set("preferences.v1.global", "{not json");
+  await injector.apply({ sessionID: "root", agent: "build", system });
+  assert.deepEqual(system, [OTHER]);
+  assert.deepEqual(injector.last(), {
+    outcome: "failed",
+    reason: "preferences-unreadable",
+  });
+
+  await injector.apply({ sessionID: "broken", agent: "build", system });
+  assert.deepEqual(injector.last(), {
+    outcome: "failed",
+    reason: "session-lookup",
+  });
+});
+
+test("a session's parent is looked up once, since it never changes", async () => {
+  const { store } = await activeStore();
+  const lookups = sessions();
+  const injector = createPolicyInjector({ store, catalog, ...lookups });
+
+  for (let turn = 0; turn < 3; turn += 1) {
+    await injector.apply({ sessionID: "root", agent: "build", system: [] });
+  }
+
+  assert.deepEqual(lookups.lookups, ["root"]);
+});
+
+test("a block left by an earlier version is recognised by its marker and replaced", () => {
+  const system = [
+    { ...OTHER },
+    {
+      type: "text",
+      text: "<delegation_policy>\n<!-- opencode-delegation-policy:owned -->\nold\n</delegation_policy>",
+    },
+  ];
+
+  replacePolicyBlock(system, "<delegation_policy>new</delegation_policy>");
+
+  assert.equal(system.length, 2);
+  assert.equal(system[1].text, "<delegation_policy>new</delegation_policy>");
+});

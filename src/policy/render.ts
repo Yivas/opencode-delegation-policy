@@ -15,7 +15,7 @@ import type {
 // ContextShunt. Where Pi relied on pi-subagents behavior (the rejected second foreground call), the
 // sentence is dropped rather than claimed for this host. Injection into requests is not done here.
 
-const OWNED_MARKER = "<!-- opencode-delegation-policy:owned -->";
+export const OWNED_MARKER = "<!-- opencode-delegation-policy:owned -->";
 
 const LAUNCH_REQUIREMENTS =
   "Before every delegated launch, name the selected role, then launch it with the host's subagent tool using the role's exact agent id and one of the exact model strings listed on its role line. Pass the model string on every new launch. The model string only selects a thinking variant: its provider/model part must equal the role's model, a variant belongs to that model only, and you never compose, shorten, or append a variant yourself. Choose that string for each run from task demand, difficulty, quantity, risk, review cost, and the selected model's capabilities. A role with a fixed or range policy lists only the strings its policy admits; that policy is binding, it is not an ambient default, and it is not inherited by another role or by the main agent. Do not omit the model string, launch an alias or an agent id that is not listed, substitute an unlisted model or variant, persist a per-run choice, launch a disabled or unconfigured role, or invent a role. Launch subagents in the background when the host offers it, unless the host or the user requires foreground, and do not start a second launch for work that is already assigned and pending. Consume each result before the decision that depends on it.";

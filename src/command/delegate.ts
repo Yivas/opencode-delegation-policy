@@ -1,3 +1,4 @@
+import type { InjectionReport } from "../policy/inject.js";
 import type { AgentInspection } from "../setup.js";
 import type { PreferenceView } from "../state/effective.js";
 import {
@@ -28,6 +29,8 @@ export type DelegateCommandPorts = {
   // The check of the agents the host actually ended up with. Without it the status has nothing to
   // say about them, and says so instead of looking clean.
   readonly inspect?: () => Promise<AgentInspection>;
+  // What happened to the policy block on the latest request of the main agent.
+  readonly injection?: () => InjectionReport;
 };
 
 const COMMAND_NAME = "delegate";
@@ -200,6 +203,7 @@ async function report(
   // a catalogue failure into its own result; anything it throws is a defect and is not swallowed.
   lines.push(...(await describeValidation(preferences, ports.catalog)));
   lines.push(...(await describeAgents(ports.inspect)));
+  lines.push(describeInjection(ports.injection));
   lines.push(
     "",
     "Agents are created when OpenCode starts; restart it for changes to take effect.",
@@ -290,6 +294,39 @@ async function describeAgents(
     );
   }
   return lines.length > 0 ? lines : ["Agent check: nothing to report."];
+}
+
+const INJECTION_TEXT: Readonly<
+  Record<
+    | Exclude<InjectionReport["outcome"], "skipped" | "failed">
+    | Extract<InjectionReport, { reason: string }>["reason"],
+    string
+  >
+> = {
+  "none-yet": "no request has been seen yet.",
+  injected: "the latest request carried the delegation policy.",
+  "plugin-agent":
+    "the latest request came from one of the plugin's own agents, which never get the policy.",
+  "child-session":
+    "the latest request came from a delegated child session, which never gets the policy.",
+  "nothing-active":
+    "the latest request carried no policy because nothing is active for that session.",
+  "session-lookup":
+    "the latest request carried no policy: the host could not say whether its session is a child.",
+  "preferences-unreadable":
+    "the latest request carried no policy: the saved preferences could not be read.",
+  "unexpected-error":
+    "the latest request carried no policy because of an unexpected error in the plugin.",
+};
+
+// The latest request may belong to any session, so this describes that request, not this one.
+function describeInjection(
+  injection: DelegateCommandPorts["injection"],
+): string {
+  if (injection === undefined) return "Policy check: not available.";
+  const report = injection();
+  const key = "reason" in report ? report.reason : report.outcome;
+  return `Policy check: ${INJECTION_TEXT[key]}`;
 }
 
 function describeIssues(issues: readonly ValidationIssue[]): string {
