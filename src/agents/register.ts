@@ -66,7 +66,7 @@ export type AgentDefinition = {
   readonly system: string;
   readonly mode: "subagent";
   readonly model: AgentModel;
-  readonly permissions: readonly AgentPermission[];
+  readonly permissions?: readonly AgentPermission[];
 };
 
 // The fields this module writes on a host agent. Narrowing the parameter keeps the product from
@@ -93,6 +93,7 @@ export type AgentEditorPort = Parameters<
 
 export type RegisterAgentResult = {
   readonly registered: readonly string[];
+  readonly removed: readonly string[];
 };
 
 // Permission rules and description do not teach behaviour: the system prompt carries the only
@@ -119,7 +120,6 @@ export function agentDefinitions(input: {
       system: ROLE_SYSTEM,
       mode: "subagent",
       model: selectionModel(selection),
-      permissions: [],
     });
   }
   for (const selection of input.advisors) {
@@ -159,8 +159,10 @@ export function advisorAgentID(advisor: number): string {
 }
 
 // Every field the plugin owns is set explicitly, so re-registering is idempotent and an agent left
-// by an earlier configuration cannot keep an old model or permission list. The casts are the branded
-// host types; the values themselves come from the validated definition.
+// by an earlier configuration cannot keep an old model. Permissions are the exception: an ordinary
+// role leaves the host's base rules alone, because writing an empty list would replace them and
+// every action would fall back to "ask". A definition without permissions therefore skips the
+// field, and only the advisor, which must deny everything, declares a list.
 export function applyDefinition(
   agent: WritableAgent,
   definition: AgentDefinition,
@@ -171,9 +173,11 @@ export function applyDefinition(
   agent.mode = definition.mode;
   agent.hidden = false;
   agent.model = definition.model as unknown as WritableAgent["model"];
-  agent.permissions = [
-    ...definition.permissions,
-  ] as unknown as WritableAgent["permissions"];
+  if (definition.permissions !== undefined) {
+    agent.permissions = [
+      ...definition.permissions,
+    ] as unknown as WritableAgent["permissions"];
+  }
 }
 
 // The ids above are a reserved namespace, so registration upserts them without inspecting what is
@@ -181,16 +185,33 @@ export function applyDefinition(
 // config that runs after this transform, which would make our own agents look foreign on the next
 // reload. A user agent that takes one of these exact ids is overwritten; that is the documented
 // contract, and it is why no other `ocv2-` id is claimed.
+// `created` holds the ids this process registered. Only those can be removed when a definition
+// disappears, because creation here is the one ownership fact the plugin actually observed; ids
+// seen only after a reload are never deleted on inference.
 export function registerAgentDefinitions(input: {
   readonly editor: AgentEditorPort;
   readonly definitions: readonly AgentDefinition[];
+  readonly created: Set<string>;
 }): RegisterAgentResult {
   const registered: string[] = [];
+  const removed: string[] = [];
   for (const definition of input.definitions) {
     input.editor.update(definition.id, (agent) =>
       applyDefinition(agent, definition),
     );
+    input.created.add(definition.id);
     registered.push(definition.id);
   }
-  return { registered };
+
+  // An agent this process registered and the current configuration no longer defines would stay
+  // launchable until a reload, so it is removed here. Nothing else is ever removed.
+  const wanted = new Set(registered);
+  for (const id of [...input.created]) {
+    if (wanted.has(id)) continue;
+    input.editor.remove(id);
+    input.created.delete(id);
+    removed.push(id);
+  }
+
+  return { registered, removed };
 }

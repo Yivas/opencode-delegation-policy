@@ -81,7 +81,9 @@ test("an enabled role becomes a subagent with its exact model and a scope instru
   assert.equal(definition.name, "Small");
   assert.equal(definition.mode, "subagent");
   assert.deepEqual(definition.model, { providerID: "acme", id: "small-model" });
-  assert.deepEqual(definition.permissions, []);
+  // An ordinary role declares no permission list, so registration leaves the host's base rules in
+  // place; writing an empty list would turn every action into "ask".
+  assert.equal(definition.permissions, undefined);
   assert.match(definition.system, /delegated task/);
 });
 
@@ -193,10 +195,15 @@ test("registering writes every defined field on the reserved ids", () => {
     advisors: [advisor(1, "acme", "advisor-model")],
   });
 
-  const result = registerAgentDefinitions({ editor, definitions });
+  const result = registerAgentDefinitions({
+    editor,
+    definitions,
+    created: new Set(),
+  });
 
   assert.deepEqual(result, {
     registered: ["ocv2-small", "ocv2-advisor-1"],
+    removed: [],
   });
   assert.deepEqual(writes, ["ocv2-small", "ocv2-advisor-1"]);
   assert.equal(agents.get("ocv2-small")?.model.id, "small-model");
@@ -206,6 +213,33 @@ test("registering writes every defined field on the reserved ids", () => {
     resource: "*",
     effect: "deny",
   });
+});
+
+test("an ordinary role keeps the host's base permission rules", () => {
+  const baseRules = [
+    { action: "*", resource: "*", effect: "allow" },
+    { action: "read", resource: "*.env", effect: "ask" },
+  ];
+  const { editor, agents } = editorDouble({
+    "ocv2-small": {
+      id: "ocv2-small",
+      name: "Small",
+      mode: "subagent",
+      hidden: false,
+      permissions: structuredClone(baseRules),
+    },
+  });
+
+  registerAgentDefinitions({
+    editor,
+    definitions: agentDefinitions({
+      roles: [role("small", "acme", "small-model")],
+      advisors: [],
+    }),
+    created: new Set(),
+  });
+
+  assert.deepEqual(agents.get("ocv2-small")?.permissions, baseRules);
 });
 
 test("the reserved ids are upserted without inspecting what is already there", () => {
@@ -224,40 +258,99 @@ test("the reserved ids are upserted without inspecting what is already there", (
       roles: [role("small", "acme", "small-model")],
       advisors: [],
     }),
+    created: new Set(),
   });
 
   // No owner field exists and config can rewrite the fields we set, so ownership cannot be
   // inferred. The exact ids are reserved and documented; everything else is left untouched.
   assert.deepEqual(result.registered, ["ocv2-small"]);
   assert.equal(agents.get("ocv2-small")?.model.id, "small-model");
-  assert.deepEqual(agents.get("ocv2-small")?.permissions, []);
+  // The role declares no permission list, so the user's own rules survive registration.
+  assert.deepEqual(agents.get("ocv2-small")?.permissions, [
+    { action: "*", resource: "*", effect: "allow" },
+  ]);
 });
 
-test("re-registering replaces stale values instead of piling them up", () => {
+test("re-registering replaces stale values and removes only what this process created", () => {
   const { editor, agents } = editorDouble();
+  const created = new Set();
   registerAgentDefinitions({
     editor,
     definitions: agentDefinitions({
       roles: [role("small", "acme", "old-model")],
       advisors: [advisor(1, "acme", "advisor-model")],
     }),
+    created,
   });
 
-  registerAgentDefinitions({
+  const result = registerAgentDefinitions({
     editor,
     definitions: agentDefinitions({
       roles: [role("small", "acme", "new-model")],
       advisors: [],
     }),
+    created,
   });
 
   assert.equal(agents.get("ocv2-small")?.model.id, "new-model");
-  // Registration never deletes: an advisor dropped from the configuration stays until the
-  // effective catalog is checked after activation, because deletion cannot be proven safe.
-  assert.ok(agents.has("ocv2-advisor-1"));
+  // The advisor existed because this process created it, so dropping it from the configuration
+  // removes it instead of leaving a launchable orphan behind.
+  assert.deepEqual(result.removed, ["ocv2-advisor-1"]);
+  assert.equal(agents.has("ocv2-advisor-1"), false);
+  assert.deepEqual([...created], ["ocv2-small"]);
 });
 
-test("applying a definition sets every owned field explicitly", () => {
+test("an agent that was already there is never removed on inference", () => {
+  const leftover = {
+    id: "ocv2-advisor-2",
+    name: "Advisor 2",
+    mode: "subagent",
+    hidden: false,
+    permissions: [],
+  };
+  const { editor, agents } = editorDouble({ "ocv2-advisor-2": leftover });
+
+  const result = registerAgentDefinitions({
+    editor,
+    definitions: agentDefinitions({
+      roles: [role("small", "acme", "small-model")],
+      advisors: [],
+    }),
+    created: new Set(),
+  });
+
+  // Left over from a previous run: reported as nothing, kept, because deletion cannot be proven safe.
+  assert.deepEqual(result.removed, []);
+  assert.ok(agents.has("ocv2-advisor-2"));
+});
+
+test("applying a definition without a permission list leaves the host rules alone", () => {
+  const baseRules = [{ action: "*", resource: "*", effect: "allow" }];
+  const agent = {
+    name: "stale",
+    description: "stale",
+    system: "stale",
+    mode: "primary",
+    hidden: true,
+    model: { providerID: "old", id: "old" },
+    permissions: structuredClone(baseRules),
+  };
+
+  applyDefinition(agent, {
+    id: "ocv2-small",
+    name: "Small",
+    description: "Role.",
+    system: "Work on the delegated task.",
+    mode: "subagent",
+    model: { providerID: "acme", id: "model" },
+  });
+
+  assert.deepEqual(agent.permissions, baseRules);
+  assert.equal(agent.mode, "subagent");
+  assert.equal(agent.hidden, false);
+});
+
+test("applying an advisor definition replaces any existing rules with the deny list", () => {
   const agent = {
     name: "stale",
     description: "stale",
