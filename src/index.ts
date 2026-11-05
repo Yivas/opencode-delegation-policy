@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin";
 
-import { createDelegateCommand } from "./command/delegate.js";
+import { delegateArguments, runDelegate } from "./command/delegate.js";
+import { delegateRpc } from "./rpc.js";
 import { createWiring } from "./setup.js";
 import {
   adaptHostRead,
@@ -24,16 +25,14 @@ const delegationPolicy: Plugin.Plugin = {
       agentList: context.agent.list.bind(context.agent),
     });
 
-    const command = createDelegateCommand({
+    // `/delegate` lives in the TUI entry, which shows the answer in a dialog; the server only answers
+    // its RPC call. A server-side slash command would answer through a session message whose
+    // visibility nothing verified, and two commands with one name have no known precedence.
+    const delegatePorts = {
       store: wiring.store,
       catalog: context.model,
       inspect: () => wiring.inspect(),
-      // Unverified against a real host: whether a synthetic message is shown to the user, and
-      // whether it starts a model turn. `resume: false` asks for neither a turn nor a side effect.
-      reply: async (sessionID, text) => {
-        await context.session.synthetic({ sessionID, text, resume: false });
-      },
-    });
+    };
     let commandRegistration: { dispose: () => Promise<void> } | undefined;
 
     // Each registration is retired on its own: one that refuses must not leave the others alive. A
@@ -63,8 +62,18 @@ const delegationPolicy: Plugin.Plugin = {
     try {
       await provisioner.register();
       await wiring.register();
-      commandRegistration = await context.command.transform((editor) => {
-        editor.add(command);
+      commandRegistration = await context.rpc.register(delegateRpc, {
+        run: async (input) => {
+          // The host checks the input against the contract before this runs, so anything else is a
+          // defect and fails loudly instead of being read as an empty command.
+          const line = (input as { line?: unknown } | null)?.line;
+          if (typeof line !== "string") {
+            throw new TypeError("the delegate request carries no line");
+          }
+          return {
+            text: await runDelegate(delegateArguments(line), delegatePorts),
+          };
+        },
       });
     } catch (error) {
       // Registration may retain a handle after another setup step fails; retire all before failing.

@@ -305,28 +305,3 @@ function describeIssue(issue: ValidationIssue): string {
         : issue.field;
   return `${subject}: ${issue.code}`;
 }
-
-export type CommandInvocation = {
-  readonly sessionID: string;
-  readonly prompt: { readonly text: string };
-};
-
-// The registered command. `reply` is how the answer reaches the session, a port because the host
-// channel that shows it to the user is the part nothing can check without a real host.
-export function createDelegateCommand(
-  ports: DelegateCommandPorts & {
-    readonly reply: (sessionID: string, text: string) => Promise<void>;
-  },
-) {
-  return {
-    name: COMMAND_NAME,
-    description: "Set the delegation defaults and see whether they work.",
-    async execute(input: CommandInvocation): Promise<void> {
-      const text = await runDelegate(
-        delegateArguments(input.prompt.text),
-        ports,
-      );
-      await ports.reply(input.sessionID, text);
-    },
-  };
-}

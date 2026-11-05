@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-  createDelegateCommand,
-  delegateArguments,
-  runDelegate,
-} from "../dist/command/delegate.js";
+import { delegateArguments, runDelegate } from "../dist/command/delegate.js";
 import { createWiring } from "../dist/setup.js";
 import { PreferenceStore } from "../dist/state/store.js";
 
@@ -141,27 +137,6 @@ test("the command accepts the whole line or only the arguments", async () => {
   );
   assert.equal(delegateArguments("intensity normal"), "intensity normal");
   assert.equal(delegateArguments("/delegate"), "");
-});
-
-test("the command answers in the session it was invoked from", async () => {
-  const { ports } = setup();
-  const replies = [];
-  const command = createDelegateCommand({
-    ...ports,
-    reply: async (sessionID, text) => {
-      replies.push({ sessionID, text });
-    },
-  });
-
-  await command.execute({
-    sessionID: "ses_one",
-    prompt: { text: "/delegate intensity aggressive" },
-  });
-
-  assert.equal(command.name, "delegate");
-  assert.equal(replies.length, 1);
-  assert.equal(replies[0].sessionID, "ses_one");
-  assert.match(replies[0].text, /Intensity: aggressive/);
 });
 
 test("role names map to their stored keys and variants pass through", async () => {

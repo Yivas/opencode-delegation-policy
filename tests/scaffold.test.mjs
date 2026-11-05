@@ -44,8 +44,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
     agentTransformCalls: 0,
     agents: new Map(),
     effectiveAgents: [],
-    commands: [],
-    synthetic: [],
+    rpcs: [],
   };
 
   const model = {
@@ -142,26 +141,16 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
       };
     },
   };
-  const command = {
-    async transform(callback) {
-      if (this !== command) {
-        throw new Error("command.transform lost its receiver");
-      }
-      callback({
-        add(definition) {
-          state.commands.push(definition);
-        },
-      });
+  const rpc = {
+    async register(definition, handlers) {
+      if (this !== rpc) throw new Error("rpc.register lost its receiver");
+      const entry = { definition, handlers };
+      state.rpcs.push(entry);
       return {
         dispose: async () => {
-          state.commands.length = 0;
+          state.rpcs = state.rpcs.filter((candidate) => candidate !== entry);
         },
       };
-    },
-  };
-  const session = {
-    async synthetic(input) {
-      state.synthetic.push(input);
     },
   };
   const context = new Proxy(
@@ -171,8 +160,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
         if (key === "model") return model;
         if (key === "storage") return storage;
         if (key === "agent") return agent;
-        if (key === "command") return command;
-        if (key === "session") return session;
+        if (key === "rpc") return rpc;
         throw new Error(`unexpected host domain access: ${String(key)}`);
       },
     },
@@ -230,8 +218,8 @@ test("setup registers owned Anthropic budget metadata through model methods only
   const cleanup = await delegationPolicy.setup(context);
 
   assert.deepEqual(
-    state.commands.map((command) => command.name),
-    ["delegate"],
+    state.rpcs.map((entry) => entry.definition.id),
+    ["opencode-delegation-policy.delegate"],
   );
   assert.equal(state.transformCalls, 1);
   assert.equal(
@@ -264,7 +252,7 @@ test("setup registers owned Anthropic budget metadata through model methods only
 
   await cleanup();
   assert.equal(state.transforms.length, 0);
-  assert.equal(state.commands.length, 0);
+  assert.equal(state.rpcs.length, 0);
 });
 
 test("setup failure retires its registration and keeps host errors opaque", async () => {
@@ -315,29 +303,34 @@ test("returned cleanup preserves retryable disposal behavior", async () => {
 test("a retirement that fails does not leave the other registrations alive", async () => {
   const { context, state } = setupContext([eligible()], { disposeFailures: 1 });
   const cleanup = await delegationPolicy.setup(context);
-  assert.equal(state.commands.length, 1);
+  assert.equal(state.rpcs.length, 1);
   assert.equal(state.agentCallbacks.length, 1);
 
   await assert.rejects(cleanup());
 
-  // The model registration refused, yet the command and the agents were still retired, in one pass.
-  assert.equal(state.commands.length, 0);
+  // The model registration refused, yet the RPC and the agents were still retired, in one pass.
+  assert.equal(state.rpcs.length, 0);
   assert.equal(state.agentCallbacks.length, 0);
 });
 
-test("the registered command answers through the session it was run from", async () => {
+test("the server answers the TUI's request with the command's report", async () => {
   const { context, state } = setupContext([eligible()]);
   await delegationPolicy.setup(context);
+  const { handlers } = state.rpcs[0];
 
-  await state.commands[0].execute({
-    sessionID: "ses_one",
-    prompt: { text: "/delegate intensity normal" },
-  });
+  const saved = await handlers.run({ line: "intensity normal" });
+  const status = await handlers.run({ line: "" });
 
-  assert.equal(state.synthetic.length, 1);
-  assert.equal(state.synthetic[0].sessionID, "ses_one");
-  assert.equal(state.synthetic[0].resume, false);
-  assert.match(state.synthetic[0].text, /Intensity: normal/);
-  // Registration already ran before the command, so the status reports a real agent check.
-  assert.match(state.synthetic[0].text, /Agent check: nothing to report/);
+  assert.match(saved.text, /Saved\./);
+  assert.match(saved.text, /Intensity: normal/);
+  // Registration already ran before the request, so the status reports a real agent check.
+  assert.match(status.text, /Agent check: nothing to report/);
+  // The host checks the input against the contract; a request that slipped past is a defect.
+  await assert.rejects(handlers.run({}), TypeError);
+});
+
+test("the server registers no slash command of its own", async () => {
+  const { context } = setupContext([eligible()]);
+  // The double throws on any domain it does not model, `command` and `session` included.
+  await delegationPolicy.setup(context);
 });
