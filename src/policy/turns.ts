@@ -17,6 +17,8 @@ export type TurnWatchPorts = {
     readonly signal: AbortSignal;
   }) => AsyncIterable<TurnEvent>;
   readonly ended: (sessionID: string, succeeded: boolean) => void;
+  // Sees every event, for the local log. It must not throw.
+  readonly observe?: (event: TurnEvent) => void;
   readonly signal: AbortSignal;
   // Waits between attempts. A port so a test does not wait in real time.
   readonly wait?: (milliseconds: number) => Promise<void>;
@@ -54,6 +56,7 @@ export function watchTurns(ports: TurnWatchPorts): {
         state = "listening";
         for await (const event of ports.subscribe({ signal: ports.signal })) {
           pause = FIRST_PAUSE;
+          ports.observe?.(event);
           const succeeded = ENDINGS[event.type];
           if (succeeded === undefined) continue;
           const sessionID = sessionOf(event.data);

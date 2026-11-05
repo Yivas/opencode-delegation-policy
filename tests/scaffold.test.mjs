@@ -105,6 +105,14 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
     async remove(key) {
       state.records.delete(key);
     },
+    async scan({ prefix }) {
+      return {
+        entries: [...state.records.keys()]
+          .filter((key) => key.startsWith(prefix))
+          .sort()
+          .map((key) => ({ key, value: JSON.parse(state.records.get(key)) })),
+      };
+    },
   };
   const agentEditor = {
     get: (id) => state.agents.get(id),
@@ -200,6 +208,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
         if (key === "rpc") return rpc;
         if (key === "session") return session;
         if (key === "event") return event;
+        if (key === "app") return { version: "2.0.21" };
         throw new Error(`unexpected host domain access: ${String(key)}`);
       },
     },
@@ -366,6 +375,39 @@ test("the server answers the TUI's request with the command's report", async () 
   assert.match(status.text, /Agent check: nothing to report/);
   // The host checks the input against the contract; a request that slipped past is a defect.
   await assert.rejects(handlers.run({}), TypeError);
+});
+
+test("/delegate log shows what was injected, from the plugin's own storage", async () => {
+  const { context, state, rebuildAgents } = setupContext([
+    eligible({ enabled: true }),
+  ]);
+  const cleanup = await delegationPolicy.setup(context);
+  let [{ handlers }] = state.rpcs;
+
+  assert.match(
+    (await handlers.run({ line: "log" })).text,
+    /local log is empty/,
+  );
+
+  for (const line of [
+    "defaults intensity normal",
+    "defaults role small anthropic/claude-sonnet-4-5",
+    "defaults role medium off",
+    "defaults role large off",
+  ]) {
+    await handlers.run({ line });
+  }
+  await cleanup();
+  await delegationPolicy.setup(context);
+  rebuildAgents();
+  state.effectiveAgents = [...state.agents.values()];
+  [{ handlers }] = state.rpcs;
+  const [{ callback }] = state.hooks;
+  await callback({ sessionID: "root", agent: "build", system: [] });
+
+  const shown = (await handlers.run({ line: "log" })).text;
+  assert.match(shown, /policy [0-9a-f]{16}: intensity normal/);
+  assert.doesNotMatch(shown, /root/);
 });
 
 test("the server registers no slash command of its own", async () => {

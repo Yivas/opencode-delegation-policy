@@ -1,5 +1,6 @@
 import { reservedAgentIDs } from "../agents/ids.js";
 import type { AgentDefinition } from "../agents/register.js";
+import type { EffectivePreferences } from "../state/effective.js";
 import { PreferenceStateError } from "../state/schema.js";
 import type { PreferenceStore } from "../state/store.js";
 import {
@@ -123,6 +124,11 @@ export type InjectorPorts = {
   // The plugin's agents as the host has them. The block names only these, whatever the session
   // turned on.
   readonly agents: () => Promise<readonly AgentDefinition[]>;
+  // Told about every block that was attached, for the local log. It must not throw.
+  readonly injected?: (
+    block: string,
+    preferences: EffectivePreferences,
+  ) => void;
 };
 
 export type PolicyInjector = {
@@ -195,10 +201,9 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
 
       let block: string | undefined;
       let projection: NoticeProjection;
+      let preferences: EffectivePreferences;
       try {
-        const { preferences } = await ports.store.readSession(
-          request.sessionID,
-        );
+        ({ preferences } = await ports.store.readSession(request.sessionID));
         projection = projectNotice(preferences);
         const validation = restrictToRegistered(
           await validatePreferenceAxes({
@@ -225,6 +230,7 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
       // attached, so a request that failed above never counts as having delivered it.
       const notice = notices.forRequest(request.sessionID, projection);
       replacePolicyBlock(request.system, block, notice);
+      if (block !== undefined) ports.injected?.(block, preferences);
       report =
         block === undefined
           ? { outcome: "skipped", reason: "nothing-active" }

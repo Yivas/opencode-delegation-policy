@@ -2,6 +2,7 @@ import type { AgentDefinition } from "../agents/register.js";
 import type { InjectionReport } from "../policy/inject.js";
 import { restrictToRegistered } from "../policy/registered.js";
 import type { TurnWatchState } from "../policy/turns.js";
+import type { LogEntry } from "../log/local-log.js";
 import type { AgentInspection } from "../setup.js";
 import type { PreferenceSource, PreferenceView } from "../state/effective.js";
 import {
@@ -55,6 +56,8 @@ export type DelegateCommandPorts = {
   readonly injection?: () => InjectionReport;
   // Whether the host's event stream, which ends notice turns, is being read.
   readonly turns?: () => TurnWatchState;
+  // The newest entries of the local, content-free log.
+  readonly log?: (limit: number) => Promise<readonly LogEntry[]>;
 };
 
 const COMMAND_NAME = "delegate";
@@ -90,6 +93,7 @@ const USAGE = [
   `  /delegate defaults thinking <${ROLE_LIST}> <level|from..to|unset>`,
   `  /delegate defaults advisors <off|unset|provider/model[#variant] ...>   up to ${MAX_ADVISORS}`,
   "",
+  "  /delegate log                            show the newest entries of the local log",
   "  /delegate help                           show this text",
   "",
   "Session settings are saved and survive a restart. Agents are created when OpenCode starts, from",
@@ -114,6 +118,7 @@ export function delegateArguments(text: string): string {
 type Request =
   | { readonly kind: "status" }
   | { readonly kind: "help" }
+  | { readonly kind: "log" }
   | { readonly kind: "defaults"; readonly change: GlobalPreferenceChange }
   | { readonly kind: "session"; readonly change: SessionPreferenceChange }
   | { readonly kind: "reset" }
@@ -127,6 +132,7 @@ export async function runDelegate(
   const request = parseRequest(line);
   if (typeof request === "string") return `${request}\n\n${USAGE}`;
   if (request.kind === "help") return USAGE;
+  if (request.kind === "log") return describeLog(ports.log);
 
   const sessionID = scope.sessionID;
   try {
@@ -194,6 +200,7 @@ function parseRequest(line: string): Request | string {
     return { kind: "status" };
   }
   if (first === "help" && rest.length === 0) return { kind: "help" };
+  if (first === "log" && rest.length === 0) return { kind: "log" };
   if (first === "reset" && rest.length === 0) return { kind: "reset" };
   if (first === "clear" && rest.length === 0) return { kind: "clear" };
   if (isOneOf(INTENSITIES, first) && rest.length === 0) {
@@ -534,6 +541,28 @@ function describeInjection(
   // The plugin sees requests from every session, so this is the latest one it handled, whichever
   // session it belonged to, and describes what the plugin did to it, not what the provider received.
   return `Policy check (latest request handled, any session): ${INJECTION_TEXT[key]}${kind}`;
+}
+
+const LOG_LINES = 20;
+
+// The log holds no content, so it can be shown as it is: what was injected and what was launched.
+async function describeLog(log: DelegateCommandPorts["log"]): Promise<string> {
+  if (log === undefined) return "The local log is not available.";
+  let entries: readonly LogEntry[];
+  try {
+    entries = await log(LOG_LINES);
+  } catch {
+    return "The local log could not be read.";
+  }
+  if (entries.length === 0) return "The local log is empty.";
+  return [
+    `Newest ${entries.length} entries of the local log (no prompts, answers or session ids are kept):`,
+    ...entries.map((entry) =>
+      entry.kind === "policy"
+        ? `${entry.at} policy ${entry.hash}: intensity ${entry.intensity}, advisor ${entry.advisorMode}, preference ${entry.preference}`
+        : `${entry.at} launch ${entry.agent}${entry.model === undefined ? "" : ` ${entry.model}`}${entry.background ? " (background)" : ""}: ${entry.outcome} after ${entry.ms} ms`,
+    ),
+  ].join("\n");
 }
 
 function describeIssues(issues: readonly ValidationIssue[]): string {

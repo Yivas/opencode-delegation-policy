@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin";
 
 import { delegateArguments, runDelegate } from "./command/delegate.js";
+import { createLocalLog } from "./log/local-log.js";
 import { createPolicyInjector } from "./policy/inject.js";
 import { watchTurns } from "./policy/turns.js";
 import { delegateRpc } from "./rpc.js";
@@ -30,11 +31,17 @@ const delegationPolicy: Plugin.Plugin = {
     // `/delegate` lives in the TUI entry, which shows the answer in a dialog; the server only answers
     // its RPC call. A server-side slash command would answer through a session message whose
     // visibility nothing verified, and two commands with one name have no known precedence.
+    // Content-free, local, in the plugin's own storage; see src/log/local-log.ts for what it keeps.
+    const log = createLocalLog({
+      storage: context.storage,
+      hostVersion: context.app.version,
+    });
     const injector = createPolicyInjector({
       store: wiring.store,
       catalog: context.model,
       session: (sessionID) => context.session.get({ sessionID }),
       agents: () => wiring.agents(),
+      injected: (block, preferences) => log.policy(block, preferences),
     });
     const delegatePorts = {
       store: wiring.store,
@@ -43,6 +50,7 @@ const delegationPolicy: Plugin.Plugin = {
       agents: () => wiring.agents(),
       injection: () => injector.last(),
       turns: () => turns?.state() ?? "stopped",
+      log: (limit: number) => log.recent(limit),
       // A lookup that fails is read as "gone": nothing is written for a session the host cannot find.
       sessionExists: (sessionID: string) =>
         context.session.get({ sessionID }).then(
@@ -119,6 +127,7 @@ const delegationPolicy: Plugin.Plugin = {
         subscribe: (options) => context.event.subscribe(options),
         ended: (sessionID, succeeded) =>
           injector.turnEnded(sessionID, succeeded),
+        observe: (event) => log.observe(event),
         signal: events.signal,
       });
     } catch (error) {
