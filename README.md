@@ -29,8 +29,13 @@ future documents are not overwritten. Mutations are serialized within one store 
 processes; a rejected write requires a fresh read because the host may have stored it.
 
 The validator checks exact model references against an injected host catalogue and keeps delegation
-and Advisor errors separate. `with-delegation` without a configured Advisor stays off; unreadable
-preferences fail both axes without applying policy. Catalogue availability is not authentication.
+and Advisor errors separate. Advisors are an ordered list of one to three exact model references with
+no thinking policy; each entry is validated on its own, so the Advisor axis is active, partial (some
+entries usable) or an error. A `#variant` on an entry is the user's default and must be proven; the
+other proven variants are listed for the launch choice. An entry with none is launched without a
+variant and records why nothing was listed, so a model without variants is not confused with one
+whose variants are unproven. `with-delegation` without configured Advisors stays off; unreadable preferences fail both
+axes without applying policy. Catalogue availability is not authentication.
 
 Thinking validation recognizes the six named OpenAI/xAI Responses efforts and scoped Anthropic,
 DeepSeek, Z.ai, Moonshot, Google and exact-model Mistral controls. Native-field recognition and model-specific Pi translations

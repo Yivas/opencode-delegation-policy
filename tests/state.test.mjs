@@ -85,7 +85,6 @@ function perRole(value) {
     medium: value,
     large: value,
     visualDesign: value,
-    advisor: value,
   };
 }
 
@@ -98,6 +97,7 @@ const BUILT_IN_PREFERENCES = {
   advisorMode: "with-delegation",
   roles: UNSET_ROLES,
   thinking: UNSET_ROLES,
+  advisors: UNSET,
 };
 
 const DEFAULT_PROVENANCE = {
@@ -106,6 +106,7 @@ const DEFAULT_PROVENANCE = {
   advisorMode: "default",
   roles: perRole("default"),
   thinking: perRole("default"),
+  advisors: "default",
 };
 
 const STORED_GLOBAL = {
@@ -115,7 +116,12 @@ const STORED_GLOBAL = {
   advisorMode: "with-delegation",
   roles: UNSET_ROLES,
   thinking: UNSET_ROLES,
+  advisors: UNSET,
 };
+
+function advisors(...models) {
+  return { kind: "configured", models };
+}
 
 function recordText(double, key) {
   return double.records.get(key);
@@ -254,33 +260,29 @@ test("roles keep inherited, disabled and configured states per session", async (
     medium: { kind: "configured", model: "provider/medium" },
     large: { kind: "disabled" },
     visualDesign: UNSET,
-    advisor: UNSET,
   });
   assert.deepEqual(view.provenance.roles, {
     small: "global",
     medium: "session",
     large: "session",
     visualDesign: "global",
-    advisor: "global",
   });
   assert.deepEqual(view.preferences.thinking, {
     small: UNSET,
     medium: UNSET,
     large: { kind: "range", from: "low", to: "high" },
     visualDesign: UNSET,
-    advisor: UNSET,
   });
   assert.equal(view.provenance.thinking.medium, "session");
   assert.equal(view.provenance.thinking.large, "global");
 });
 
-test("toggling only the Advisor mode keeps its configured model and thinking", async () => {
+test("toggling only the Advisor mode keeps the configured Advisors", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
 
   await store.saveDefaults({
-    roles: { advisor: { kind: "configured", model: "provider/advisor" } },
-    thinking: { advisor: { kind: "fixed", level: "high" } },
+    advisors: advisors("provider/first", "provider/second#deep"),
   });
 
   for (const advisorMode of ["on", "off", "with-delegation"]) {
@@ -288,16 +290,101 @@ test("toggling only the Advisor mode keeps its configured model and thinking", a
 
     assert.equal(view.preferences.advisorMode, advisorMode);
     assert.equal(view.provenance.advisorMode, "session");
-    assert.deepEqual(view.preferences.roles.advisor, {
-      kind: "configured",
-      model: "provider/advisor",
-    });
-    assert.deepEqual(view.preferences.thinking.advisor, {
-      kind: "fixed",
-      level: "high",
-    });
-    assert.equal(view.provenance.roles.advisor, "global");
+    assert.deepEqual(
+      view.preferences.advisors,
+      advisors("provider/first", "provider/second#deep"),
+    );
+    assert.equal(view.provenance.advisors, "global");
   }
+});
+
+test("a session Advisor list replaces the whole global list and disabled overrides it", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+
+  await store.saveDefaults({
+    advisors: advisors("provider/a", "provider/b", "provider/c"),
+  });
+  const replaced = await store.applySession("parent", {
+    advisors: advisors("provider/b", "provider/b"),
+  });
+
+  // Order and duplicates are kept: two equal entries are two consultations.
+  assert.deepEqual(
+    replaced.preferences.advisors,
+    advisors("provider/b", "provider/b"),
+  );
+  assert.equal(replaced.provenance.advisors, "session");
+
+  const disabled = await store.applySession("parent", {
+    advisors: { kind: "disabled" },
+  });
+  assert.deepEqual(disabled.preferences.advisors, { kind: "disabled" });
+
+  const inherited = await store.applySession("parent", {
+    advisors: { kind: "inherit" },
+  });
+  assert.deepEqual(
+    inherited.preferences.advisors,
+    advisors("provider/a", "provider/b", "provider/c"),
+  );
+  assert.equal(inherited.provenance.advisors, "global");
+});
+
+const SPARSE_MODELS = [];
+SPARSE_MODELS[1] = "provider/a";
+
+test("Advisor lists outside one to three text entries are rejected without writing", async () => {
+  const invalidSettings = [
+    advisors(),
+    advisors("provider/a", "provider/b", "provider/c", "provider/d"),
+    advisors("provider/a", 7),
+    advisors(""),
+    { kind: "configured", models: "provider/a" },
+    { kind: "configured", models: SPARSE_MODELS },
+    { kind: "configured" },
+    { kind: "disabled", models: ["provider/a"] },
+  ];
+
+  for (const setting of invalidSettings) {
+    const double = createStorageDouble();
+    const store = new PreferenceStore(double.storage);
+
+    await assert.rejects(
+      store.saveDefaults({ advisors: setting }),
+      assertStoreError("invalid-change"),
+      JSON.stringify(setting),
+    );
+    await assert.rejects(
+      store.applySession("parent", { advisors: setting }),
+      assertStoreError("invalid-change"),
+      JSON.stringify(setting),
+    );
+    assert.deepEqual(double.writes, []);
+  }
+});
+
+test("the global Advisor setting cannot inherit and Advisors are no longer a role", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+
+  await assert.rejects(
+    store.saveDefaults({ advisors: { kind: "inherit" } }),
+    assertStoreError("invalid-change"),
+  );
+  await assert.rejects(
+    store.saveDefaults({
+      roles: { advisor: { kind: "configured", model: "provider/a" } },
+    }),
+    assertStoreError("invalid-change"),
+  );
+  await assert.rejects(
+    store.applySession("parent", {
+      thinking: { advisor: { kind: "fixed", level: "high" } },
+    }),
+    assertStoreError("invalid-change"),
+  );
+  assert.deepEqual(double.writes, []);
 });
 
 test("clear removes the session override and returns to the built-in defaults", async () => {
@@ -338,24 +425,21 @@ test("clear returns to saved global defaults and reports them as global", async 
   assert.equal(cleared.provenance.advisorMode, "global");
 });
 
-test("reset turns off only intensity and Advisor mode while the Advisor stays configured", async () => {
+test("reset turns off only intensity and Advisor mode while the Advisors stay configured", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
 
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "on",
-    roles: {
-      small: { kind: "configured", model: "provider/small" },
-      advisor: { kind: "configured", model: "provider/advisor" },
-    },
-    thinking: { advisor: { kind: "fixed", level: "medium" } },
+    roles: { small: { kind: "configured", model: "provider/small" } },
+    advisors: advisors("provider/advisor"),
   });
   await store.applySession("parent", {
     intensity: "aggressive",
     advisorMode: "with-delegation",
     roles: { small: { kind: "disabled" } },
-    thinking: { advisor: { kind: "unset" } },
+    advisors: { kind: "disabled" },
   });
   const beforeReset = await store.readSession("parent");
   assert.equal(beforeReset.preferences.advisorMode, "with-delegation");
@@ -370,16 +454,9 @@ test("reset turns off only intensity and Advisor mode while the Advisor stays co
     kind: "configured",
     model: "provider/small",
   });
-  assert.deepEqual(view.preferences.roles.advisor, {
-    kind: "configured",
-    model: "provider/advisor",
-  });
-  assert.deepEqual(view.preferences.thinking.advisor, {
-    kind: "fixed",
-    level: "medium",
-  });
+  assert.deepEqual(view.preferences.advisors, advisors("provider/advisor"));
   assert.equal(view.provenance.roles.small, "global");
-  assert.equal(view.provenance.thinking.advisor, "global");
+  assert.equal(view.provenance.advisors, "global");
   assert.equal(view.preferences.preference, "standard");
 });
 

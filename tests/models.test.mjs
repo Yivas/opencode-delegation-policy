@@ -109,6 +109,16 @@ function configured(model) {
 const UNSET = { kind: "unset" };
 const DISABLED = { kind: "disabled" };
 
+function advisors(...models) {
+  return { kind: "configured", models };
+}
+
+// A valid Advisor entry that lists no variant. Models of the shared catalogue have none, which the
+// selector reports as unsupported; a model whose variants exist but are unproven is unmapped.
+function advisorSelection(advisor, id, unlisted = "thinking-unsupported") {
+  return { advisor, model: { providerID: "acme", id }, variants: [], unlisted };
+}
+
 const UNREADABLE_ISSUES = [
   { field: "preferences", code: "preferences-unreadable" },
 ];
@@ -124,15 +134,14 @@ const STORED_GLOBAL = {
     medium: UNSET,
     large: UNSET,
     visualDesign: UNSET,
-    advisor: UNSET,
   },
   thinking: {
     small: UNSET,
     medium: UNSET,
     large: UNSET,
     visualDesign: UNSET,
-    advisor: UNSET,
   },
+  advisors: UNSET,
 };
 
 function sessionStorageKey(sessionID) {
@@ -278,11 +287,9 @@ test("off axes do not validate their stored roles or query the catalogue", async
   await store.saveDefaults({
     intensity: "off",
     advisorMode: "off",
-    roles: {
-      small: configured("acme/unknown"),
-      advisor: configured("acme/nope"),
-    },
+    roles: { small: configured("acme/unknown") },
     thinking: { small: { kind: "fixed", level: "turbo" } },
+    advisors: advisors("acme/nope"),
   });
   const catalog = catalogDouble(standardCatalog());
 
@@ -305,10 +312,8 @@ test("with delegation off, an invalid stored ordinary role is ignored while a va
   await store.saveDefaults({
     intensity: "off",
     advisorMode: "on",
-    roles: {
-      small: configured("acme/unknown"),
-      advisor: configured("acme/advisor-model"),
-    },
+    roles: { small: configured("acme/unknown") },
+    advisors: advisors("acme/advisor-model"),
   });
   const catalog = catalogDouble(standardCatalog());
 
@@ -321,11 +326,7 @@ test("with delegation off, an invalid stored ordinary role is ignored while a va
   assert.deepEqual(result.delegation, { status: "off" });
   assert.deepEqual(result.advisor, {
     status: "active",
-    advisor: {
-      role: "advisor",
-      model: { providerID: "acme", id: "advisor-model" },
-      thinking: { kind: "unset" },
-    },
+    advisors: [advisorSelection(1, "advisor-model")],
   });
   assert.equal(catalog.calls, 1);
 });
@@ -431,8 +432,8 @@ test("an invalid configured Visual Design role invalidates delegation and leaves
     roles: {
       small: configured("acme/small-model"),
       visualDesign: configured("acme/missing-model"),
-      advisor: configured("acme/advisor-model"),
     },
+    advisors: advisors("acme/advisor-model"),
   });
 
   const result = await validateDelegationAxes({
@@ -981,15 +982,11 @@ test("an Advisor on without a configured Advisor is an Advisor error that leaves
   assert.equal(result.delegation.status, "active");
   assert.deepEqual(result.advisor, {
     status: "error",
-    issues: [{ role: "advisor", field: "model", code: "not-configured" }],
+    issues: [{ field: "advisors", code: "not-configured" }],
   });
 });
 
 test("the Advisor mode and intensity combine into the expected axis states", async () => {
-  const advisorRoles = {
-    small: configured("acme/small-model"),
-    advisor: configured("acme/advisor-model"),
-  };
   const cases = [
     { intensity: "off", advisorMode: "off", advisor: "off" },
     { intensity: "normal", advisorMode: "off", advisor: "off" },
@@ -1006,7 +1003,12 @@ test("the Advisor mode and intensity combine into the expected axis states", asy
   for (const { intensity, advisorMode, advisor } of cases) {
     const double = createStorageDouble();
     const store = new PreferenceStore(double.storage);
-    await store.saveDefaults({ intensity, advisorMode, roles: advisorRoles });
+    await store.saveDefaults({
+      intensity,
+      advisorMode,
+      roles: { small: configured("acme/small-model") },
+      advisors: advisors("acme/advisor-model"),
+    });
 
     const result = await validateDelegationAxes({
       store,
@@ -1024,10 +1026,8 @@ test("with-delegation, active intensity, invalid delegation and a valid Advisor 
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "with-delegation",
-    roles: {
-      small: configured("acme/missing-model"),
-      advisor: configured("acme/advisor-model"),
-    },
+    roles: { small: configured("acme/missing-model") },
+    advisors: advisors("acme/advisor-model"),
   });
 
   const result = await validateDelegationAxes({
@@ -1039,25 +1039,22 @@ test("with-delegation, active intensity, invalid delegation and a valid Advisor 
   assert.equal(result.delegation.status, "error");
   assert.deepEqual(result.advisor, {
     status: "active",
-    advisor: {
-      role: "advisor",
-      model: { providerID: "acme", id: "advisor-model" },
-      thinking: { kind: "unset" },
-    },
+    advisors: [advisorSelection(1, "advisor-model")],
   });
 });
 
-test("unsupported Advisor thinking invalidates only the Advisor axis", async () => {
+test("each valid Advisor is kept in order with its number and an invalid one makes the axis partial", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "on",
-    roles: {
-      small: configured("acme/small-model"),
-      advisor: configured("acme/advisor-model"),
-    },
-    thinking: { advisor: { kind: "fixed", level: "high" } },
+    roles: { small: configured("acme/small-model") },
+    advisors: advisors(
+      "acme/medium-model",
+      "acme/missing-model",
+      "acme/medium-model",
+    ),
   });
 
   const result = await validateDelegationAxes({
@@ -1068,24 +1065,135 @@ test("unsupported Advisor thinking invalidates only the Advisor axis", async () 
 
   assert.equal(result.delegation.status, "active");
   assert.deepEqual(result.advisor, {
-    status: "error",
+    status: "partial",
+    advisors: [
+      advisorSelection(1, "medium-model"),
+      advisorSelection(3, "medium-model"),
+    ],
+    issues: [{ advisor: 2, field: "model", code: "model-not-found" }],
+  });
+});
+
+test("an Advisor lists its proven variants and keeps a proven default variant", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "off",
+    advisorMode: "on",
+    advisors: advisors("openai/advisor-model", "openai/advisor-model#deep"),
+  });
+  const catalog = catalogDouble([
+    openAIResponsesModel("advisor-model", [
+      effortVariant("low", "low"),
+      effortVariant("deep", "high"),
+    ]),
+  ]);
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  assert.equal(result.advisor.status, "active");
+  const [listed, withDefault] = result.advisor.advisors;
+  assert.deepEqual(listed.model, { providerID: "openai", id: "advisor-model" });
+  assert.deepEqual(
+    listed.variants.map(({ variant, admittedLevels }) => ({
+      variant,
+      admittedLevels,
+    })),
+    [
+      { variant: "low", admittedLevels: ["low"] },
+      { variant: "deep", admittedLevels: ["high"] },
+    ],
+  );
+  assert.equal(withDefault.advisor, 2);
+  assert.deepEqual(withDefault.model, {
+    providerID: "openai",
+    id: "advisor-model",
+    variant: "deep",
+  });
+  assert.deepEqual(withDefault.variants, listed.variants);
+  assert.equal(listed.unlisted, undefined);
+});
+
+test("an Advisor without proven variants stays valid with nothing to list, but an unproven default fails it", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "off",
+    advisorMode: "on",
+    advisors: advisors(
+      "acme/advisor-model",
+      "acme/budget-model",
+      "acme/budget-model#budget",
+    ),
+  });
+  const catalog = catalogDouble([
+    catalogModel("acme", "advisor-model"),
+    catalogModel("acme", "budget-model", {
+      variants: [
+        { id: "budget", settings: { thinking: { budgetTokens: 8000 } } },
+      ],
+    }),
+  ]);
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(result.advisor, {
+    status: "partial",
+    advisors: [
+      advisorSelection(1, "advisor-model"),
+      advisorSelection(2, "budget-model", "thinking-unmapped"),
+    ],
     issues: [
-      { role: "advisor", field: "thinking", code: "thinking-unsupported" },
+      { advisor: 3, field: "thinking", code: "thinking-variant-unproven" },
     ],
   });
 });
 
-test("an inactive axis does not validate its thinking even when its role is invalid", async () => {
+test("a catalogue identity that contradicts the recipe fails the Advisor instead of hiding its variants", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "off",
+    advisorMode: "on",
+    advisors: advisors("openai/advisor-model"),
+  });
+  const catalog = catalogDouble([
+    {
+      ...openAIResponsesModel("advisor-model", [effortVariant("deep", "high")]),
+      canonical: "alias",
+    },
+  ]);
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(result.advisor, {
+    status: "error",
+    issues: [
+      { advisor: 1, field: "thinking", code: "thinking-identity-unresolved" },
+    ],
+  });
+});
+
+test("an inactive Advisor axis does not validate its entries", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "off",
-    roles: {
-      small: configured("acme/small-model"),
-      advisor: configured("acme/missing"),
-    },
-    thinking: { advisor: { kind: "range", from: "high", to: "low" } },
+    roles: { small: configured("acme/small-model") },
+    advisors: advisors("acme/missing", "not a reference"),
   });
 
   const result = await validateDelegationAxes({
@@ -1104,10 +1212,8 @@ test("a catalogue rejection fails only the active axes and never echoes the host
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "on",
-    roles: {
-      small: configured("acme/small-model"),
-      advisor: configured("acme/advisor-model"),
-    },
+    roles: { small: configured("acme/small-model") },
+    advisors: advisors("acme/advisor-model", "acme/medium-model"),
   });
   const catalog = catalogDouble(standardCatalog());
   catalog.failWith = new Error(`auth token ${SECRET} rejected`);
@@ -1125,10 +1231,12 @@ test("a catalogue rejection fails only the active axes and never echoes the host
       { field: "roles", code: "no-ordinary-role" },
     ],
   });
+  // A catalogue failure fails every entry, so the axis is an error and never partial.
   assert.deepEqual(result.advisor, {
     status: "error",
     issues: [
-      { role: "advisor", field: "catalog", code: "catalog-unavailable" },
+      { advisor: 1, field: "catalog", code: "catalog-unavailable" },
+      { advisor: 2, field: "catalog", code: "catalog-unavailable" },
     ],
   });
   assert.ok(!JSON.stringify(result).includes(SECRET));
@@ -1165,11 +1273,9 @@ test("the validation output carries only identifiers, variants, levels and issue
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "on",
-    roles: {
-      small: configured("acme/small-model#deep"),
-      advisor: configured("acme/advisor-model"),
-    },
+    roles: { small: configured("acme/small-model#deep") },
     thinking: { small: { kind: "fixed", level: "high" } },
+    advisors: advisors("acme/advisor-model"),
   });
   const catalog = catalogDouble([
     catalogModel("acme", "small-model", {
@@ -1199,11 +1305,7 @@ test("the validation output carries only identifiers, variants, levels and issue
   });
   assert.deepEqual(result.advisor, {
     status: "active",
-    advisor: {
-      role: "advisor",
-      model: { providerID: "acme", id: "advisor-model" },
-      thinking: { kind: "unset" },
-    },
+    advisors: [advisorSelection(1, "advisor-model")],
   });
   assert.ok(!JSON.stringify(result).includes(SECRET));
   assert.ok(!JSON.stringify(result).includes("headers"));
@@ -1216,11 +1318,9 @@ test("validation never mutates the catalogue or the persisted view", async () =>
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "on",
-    roles: {
-      small: configured("openai/small-model#deep"),
-      advisor: configured("acme/advisor-model"),
-    },
+    roles: { small: configured("openai/small-model#deep") },
     thinking: { small: { kind: "fixed", level: "high" } },
+    advisors: advisors("acme/advisor-model"),
   });
   const catalog = catalogDouble([
     openAIResponsesModel("small-model", [effortVariant("deep", "high")]),
@@ -1236,7 +1336,7 @@ test("validation never mutates the catalogue or the persisted view", async () =>
     sessionID: SESSION_ID,
   });
   result.delegation.roles[0].model.variant = "tampered";
-  result.advisor.advisor.model.id = "tampered";
+  result.advisor.advisors[0].model.id = "tampered";
 
   assert.deepEqual(catalog.models, catalogBefore);
   assert.equal(double.records.get(GLOBAL_KEY), storedBefore);
@@ -1267,13 +1367,14 @@ function catalogEnvelope(data) {
   return { location: { directory: "/synthetic/project" }, data };
 }
 
-test("with-delegation and an unset or disabled Advisor leave the Advisor axis off while delegation stays active", async () => {
+test("with-delegation and an unset or disabled Advisor list leave the Advisor axis off while delegation stays active", async () => {
   for (const advisorRole of [UNSET, DISABLED]) {
     const double = createStorageDouble();
     const store = new PreferenceStore(double.storage);
     await store.saveDefaults({
       intensity: "normal",
-      roles: { small: configured("acme/small-model"), advisor: advisorRole },
+      roles: { small: configured("acme/small-model") },
+      advisors: advisorRole,
     });
     const catalog = catalogDouble(standardCatalog());
 
@@ -1298,10 +1399,8 @@ test("with-delegation with an active intensity reports a configured but unavaila
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
     intensity: "normal",
-    roles: {
-      small: configured("acme/small-model"),
-      advisor: configured("acme/advisor-model"),
-    },
+    roles: { small: configured("acme/small-model") },
+    advisors: advisors("acme/advisor-model"),
   });
 
   const result = await validateDelegationAxes({
@@ -1313,17 +1412,18 @@ test("with-delegation with an active intensity reports a configured but unavaila
   assert.equal(result.delegation.status, "active");
   assert.deepEqual(result.advisor, {
     status: "error",
-    issues: [{ role: "advisor", field: "model", code: "model-disabled" }],
+    issues: [{ advisor: 1, field: "model", code: "model-disabled" }],
   });
 });
 
-test("on with a disabled Advisor is an Advisor error that names only the missing configuration", async () => {
+test("on with a disabled Advisor list is an Advisor error that names only the missing configuration", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "on",
-    roles: { small: configured("acme/small-model"), advisor: DISABLED },
+    roles: { small: configured("acme/small-model") },
+    advisors: DISABLED,
   });
 
   const result = await validateDelegationAxes({
@@ -1335,7 +1435,7 @@ test("on with a disabled Advisor is an Advisor error that names only the missing
   assert.equal(result.delegation.status, "active");
   assert.deepEqual(result.advisor, {
     status: "error",
-    issues: [{ role: "advisor", field: "model", code: "not-configured" }],
+    issues: [{ field: "advisors", code: "not-configured" }],
   });
 });
 
@@ -1345,10 +1445,8 @@ test("each validation reads the catalogue once for both active axes and again on
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "on",
-    roles: {
-      small: configured("acme/small-model"),
-      advisor: configured("acme/advisor-model"),
-    },
+    roles: { small: configured("acme/small-model") },
+    advisors: advisors("acme/advisor-model"),
   });
   const catalog = catalogDouble(standardCatalog());
   const validate = () =>
@@ -1364,7 +1462,7 @@ test("each validation reads the catalogue once for both active axes and again on
   );
   const refreshed = await validate();
   assert.deepEqual(refreshed.advisor.issues, [
-    { role: "advisor", field: "model", code: "model-disabled" },
+    { advisor: 1, field: "model", code: "model-disabled" },
   ]);
   assert.equal(catalog.calls, 2);
 
@@ -1376,7 +1474,7 @@ test("each validation reads the catalogue once for both active axes and again on
     code: "catalog-unavailable",
   });
   assert.deepEqual(rejected.advisor.issues, [
-    { role: "advisor", field: "catalog", code: "catalog-unavailable" },
+    { advisor: 1, field: "catalog", code: "catalog-unavailable" },
   ]);
   assert.equal(catalog.calls, 3);
 
@@ -1389,16 +1487,23 @@ test("each validation reads the catalogue once for both active axes and again on
 });
 
 test("a corrupt or future Advisor substate fails both axes as an unreadable document", async () => {
+  // The single-Advisor role and its thinking policy of earlier builds are corrupt now, too.
   const corruptAdvisorSubstates = [
-    { roles: { advisor: { kind: "configured" } } },
+    { advisors: { kind: "configured" } },
+    { advisors: { kind: "configured", models: [] } },
     {
-      roles: {
-        advisor: { kind: "configured", model: "acme/advisor-model", note: 1 },
+      advisors: {
+        kind: "configured",
+        models: ["acme/a", "acme/b", "acme/c", "acme/d"],
       },
     },
-    { roles: { advisor: { kind: "tiered" } } },
-    { thinking: { advisor: { kind: "fixed" } } },
-    { thinking: { advisor: { kind: "budget", tokens: 8000 } } },
+    {
+      advisors: { kind: "configured", models: ["acme/advisor-model"], note: 1 },
+    },
+    { advisors: { kind: "inherit" } },
+    { advisors: { kind: "tiered" } },
+    { roles: { advisor: configured("acme/advisor-model") } },
+    { thinking: { advisor: { kind: "fixed", level: "high" } } },
   ];
 
   for (const substate of corruptAdvisorSubstates) {
@@ -1411,6 +1516,7 @@ test("a corrupt or future Advisor substate fails both axes as an unreadable docu
       intensity: "normal",
       roles,
       thinking,
+      advisors: substate.advisors ?? STORED_GLOBAL.advisors,
     });
     double.records.set(GLOBAL_KEY, original);
     const catalog = catalogDouble(standardCatalog());
@@ -1506,10 +1612,8 @@ test("a malformed catalogue fails only the active axes with an opaque diagnostic
       await store.saveDefaults({
         intensity,
         advisorMode,
-        roles: {
-          small: configured("acme/small-model"),
-          advisor: configured("acme/advisor-model"),
-        },
+        roles: { small: configured("acme/small-model") },
+        advisors: advisors("acme/advisor-model"),
       });
       const catalog = rawCatalogDouble(listed);
 
@@ -1525,7 +1629,7 @@ test("a malformed catalogue fails only the active axes with an opaque diagnostic
         {
           status: "error",
           issues: [
-            { role: "advisor", field: "catalog", code: "catalog-unavailable" },
+            { advisor: 1, field: "catalog", code: "catalog-unavailable" },
           ],
         },
         label,
@@ -1575,11 +1679,9 @@ for (const { name, data } of [
     await store.saveDefaults({
       intensity: "normal",
       advisorMode: "on",
-      roles: {
-        small: configured("acme/small-model"),
-        advisor: configured("acme/advisor-model"),
-      },
+      roles: { small: configured("acme/small-model") },
       thinking: { small: { kind: "fixed", level: "high" } },
+      advisors: advisors("acme/advisor-model"),
     });
     const catalog = rawCatalogDouble(catalogEnvelope(data));
 
@@ -1598,9 +1700,7 @@ for (const { name, data } of [
     });
     assert.deepEqual(result.advisor, {
       status: "error",
-      issues: [
-        { role: "advisor", field: "catalog", code: "catalog-unavailable" },
-      ],
+      issues: [{ advisor: 1, field: "catalog", code: "catalog-unavailable" }],
     });
     assert.equal(catalog.calls, 1);
   });
@@ -1978,17 +2078,14 @@ test("a model whose only variant proves another level is unsupported for the req
   });
 });
 
-test("native Alibaba off syntax does not prove model-specific role eligibility", async () => {
+test("native Alibaba off syntax does not prove model-specific eligibility for an Advisor default", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "on",
-    roles: {
-      small: configured("acme/small-model"),
-      advisor: configured("alibaba/synthetic-model#no-thinking"),
-    },
-    thinking: { advisor: { kind: "fixed", level: "off" } },
+    roles: { small: configured("acme/small-model") },
+    advisors: advisors("alibaba/synthetic-model#no-thinking"),
   });
   const catalog = catalogDouble([
     catalogModel("acme", "small-model"),
@@ -2008,7 +2105,7 @@ test("native Alibaba off syntax does not prove model-specific role eligibility",
   assert.deepEqual(result.advisor, {
     status: "error",
     issues: [
-      { role: "advisor", field: "thinking", code: "thinking-variant-unproven" },
+      { advisor: 1, field: "thinking", code: "thinking-variant-unproven" },
     ],
   });
 });

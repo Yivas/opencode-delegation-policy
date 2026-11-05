@@ -11,6 +11,8 @@ import type { PreferenceStore } from "../state/store.js";
 import {
   selectThinkingVariant,
   type ThinkingIssueCode,
+  type ThinkingOption,
+  type ThinkingRequirement,
   type ThinkingSelection,
   type ThinkingVariant,
   thinkingRequirement,
@@ -47,16 +49,32 @@ export type ValidationCode =
   | ThinkingIssueCode;
 
 // Carries no raw value, overlay, header or host message: only where the problem is and what kind.
+// The subject is a role, an Advisor entry (numbered from 1) or neither, never both.
 export type ValidationIssue = {
-  readonly role?: RoleKey;
   readonly field:
     | "preferences"
     | "catalog"
     | "roles"
+    | "advisors"
     | "model"
     | "variant"
     | "thinking";
   readonly code: ValidationCode;
+} & (
+  | { readonly role?: RoleKey; readonly advisor?: never }
+  | { readonly advisor: number; readonly role?: never }
+);
+
+// `model.variant` is the user's default when the reference carries one. `variants` lists every
+// proven variant the main agent may pass instead. When none can be listed, `variants` is empty,
+// `unlisted` says why ("thinking-unsupported" when the model has no proven-capable variant at all,
+// "thinking-unmapped" when some exist but none is proven, and so on), and the Advisor is launched
+// without a variant, like an ordinary role with no thinking policy.
+export type AdvisorSelection = {
+  readonly advisor: number;
+  readonly model: ModelReference;
+  readonly variants: readonly ThinkingOption[];
+  readonly unlisted?: ThinkingIssueCode;
 };
 
 export type DelegationAxis =
@@ -68,9 +86,19 @@ export type DelegationAxis =
     }
   | { readonly status: "error"; readonly issues: readonly ValidationIssue[] };
 
+// "partial" keeps the valid Advisors usable and reports the rest; "active" never carries issues and
+// "error" means no configured Advisor is usable.
 export type AdvisorAxis =
   | { readonly status: "off" }
-  | { readonly status: "active"; readonly advisor: RoleSelection }
+  | {
+      readonly status: "active";
+      readonly advisors: readonly AdvisorSelection[];
+    }
+  | {
+      readonly status: "partial";
+      readonly advisors: readonly AdvisorSelection[];
+      readonly issues: readonly ValidationIssue[];
+    }
   | { readonly status: "error"; readonly issues: readonly ValidationIssue[] };
 
 export type DelegationValidation = {
@@ -95,9 +123,15 @@ type CatalogModel = {
 type CatalogResult =
   | { readonly ok: true; readonly models: readonly CatalogModel[] }
   | { readonly ok: false };
-type RoleResult =
-  | { readonly ok: true; readonly selection: RoleSelection }
-  | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
+type IssueSubject = { readonly role: RoleKey } | { readonly advisor: number };
+type Resolved<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly issue: ValidationIssue };
+type ResolvedModel = {
+  readonly reference: ModelReference;
+  readonly model: CatalogModel;
+  readonly inlineVariant: ThinkingVariant | undefined;
+};
 
 const DELEGATION_ROLES: readonly RoleKey[] = [
   "small",
@@ -106,6 +140,19 @@ const DELEGATION_ROLES: readonly RoleKey[] = [
   "visualDesign",
 ];
 const ORDINARY_ROLES: readonly RoleKey[] = ["small", "medium", "large"];
+
+// Listing an Advisor's variants asks which ones have any proven level at all.
+const ANY_THINKING_LEVEL: ThinkingRequirement = { from: "off", to: "max" };
+
+// The only failures that mean "no variant can be listed" for a model that is otherwise valid.
+// Anything else, including a catalogue identity that contradicts the recipe and any code added
+// later, invalidates the Advisor entry instead.
+const NO_LISTABLE_VARIANT_CODES: readonly ThinkingIssueCode[] = [
+  "thinking-unmapped",
+  "thinking-unsupported",
+  "thinking-construction-unproven",
+  "thinking-pi-level-unsupported",
+];
 
 // Snapshot codes mean the stored document cannot be trusted. Other PreferenceStateError codes
 // are caller errors, such as an invalid session identifier, and must not look like corruption.
@@ -163,10 +210,10 @@ async function validateDelegation(
       loadCatalog,
     );
     if (!result.ok) {
-      issues.push(...result.issues);
+      issues.push(result.issue);
       continue;
     }
-    roles.push(result.selection);
+    roles.push(result.value);
     if (ORDINARY_ROLES.includes(role)) {
       validOrdinaryRoles += 1;
     }
@@ -189,14 +236,14 @@ async function validateAdvisor(
     return { status: "off" };
   }
 
-  // "with-delegation" consults only while delegation is active and an Advisor is configured, so
-  // an unset or disabled Advisor is off there. "on" requires its Advisor.
-  const setting = preferences.roles.advisor;
+  // "with-delegation" consults only while delegation is active and Advisors are configured, so
+  // an unset or disabled list is off there. "on" requires at least one Advisor.
+  const setting = preferences.advisors;
   if (setting.kind !== "configured") {
     if (preferences.advisorMode === "on") {
       return {
         status: "error",
-        issues: [{ role: "advisor", field: "model", code: "not-configured" }],
+        issues: [{ field: "advisors", code: "not-configured" }],
       };
     }
     return { status: "off" };
@@ -208,16 +255,25 @@ async function validateAdvisor(
     return { status: "off" };
   }
 
-  const result = await resolveConfiguredRole(
-    "advisor",
-    setting.model,
-    preferences.thinking.advisor,
-    loadCatalog,
-  );
-  if (!result.ok) {
-    return { status: "error", issues: result.issues };
+  // Each entry stands alone: an invalid one is reported and never replaced by another model.
+  const advisors: AdvisorSelection[] = [];
+  const issues: ValidationIssue[] = [];
+  for (const [index, reference] of setting.models.entries()) {
+    const result = await resolveAdvisor(index + 1, reference, loadCatalog);
+    if (result.ok) {
+      advisors.push(result.value);
+    } else {
+      issues.push(result.issue);
+    }
   }
-  return { status: "active", advisor: result.selection };
+
+  if (advisors.length === 0) {
+    return { status: "error", issues };
+  }
+  if (issues.length > 0) {
+    return { status: "partial", advisors, issues };
+  }
+  return { status: "active", advisors };
 }
 
 async function resolveConfiguredRole(
@@ -225,30 +281,112 @@ async function resolveConfiguredRole(
   reference: string,
   thinking: ThinkingSetting,
   loadCatalog: () => Promise<CatalogResult>,
-): Promise<RoleResult> {
+): Promise<Resolved<RoleSelection>> {
+  const subject = { role };
+  const resolved = await resolveModel(subject, reference, loadCatalog);
+  if (!resolved.ok) {
+    return resolved;
+  }
+  const { model, inlineVariant } = resolved.value;
+
+  const requirement = thinkingRequirement(thinking);
+  if (!requirement.ok) {
+    return failed(subject, "thinking", requirement.code);
+  }
+  const selected = selectThinkingVariant(
+    model,
+    requirement.requirement,
+    inlineVariant,
+  );
+  if (!selected.ok) {
+    return failed(subject, "thinking", selected.code);
+  }
+
+  return {
+    ok: true,
+    value: {
+      role,
+      model: resolved.value.reference,
+      thinking: selected.selection,
+    },
+  };
+}
+
+async function resolveAdvisor(
+  advisor: number,
+  reference: string,
+  loadCatalog: () => Promise<CatalogResult>,
+): Promise<Resolved<AdvisorSelection>> {
+  const subject = { advisor };
+  const resolved = await resolveModel(subject, reference, loadCatalog);
+  if (!resolved.ok) {
+    return resolved;
+  }
+  const { model, inlineVariant } = resolved.value;
+
+  // A default written by the user must be proven; it is never dropped to make the entry valid.
+  if (inlineVariant !== undefined) {
+    const selected = selectThinkingVariant(
+      model,
+      ANY_THINKING_LEVEL,
+      inlineVariant,
+    );
+    if (!selected.ok) {
+      return failed(subject, "thinking", selected.code);
+    }
+  }
+
+  // The listing is a separate call: with an inline variant the selector returns only that one.
+  const listed = selectThinkingVariant(model, ANY_THINKING_LEVEL, undefined);
+  const base = { advisor, model: resolved.value.reference };
+  if (listed.ok) {
+    // A requirement without an inline variant yields options; anything else is not a listing.
+    if (listed.selection.kind !== "options") {
+      return failed(subject, "thinking", "thinking-unsupported");
+    }
+    return {
+      ok: true,
+      value: { ...base, variants: listed.selection.options },
+    };
+  }
+  if (NO_LISTABLE_VARIANT_CODES.includes(listed.code)) {
+    return {
+      ok: true,
+      value: { ...base, variants: [], unlisted: listed.code },
+    };
+  }
+  return failed(subject, "thinking", listed.code);
+}
+
+// Reference grammar, catalogue lookup and inline variant shared by roles and Advisors.
+async function resolveModel(
+  subject: IssueSubject,
+  reference: string,
+  loadCatalog: () => Promise<CatalogResult>,
+): Promise<Resolved<ResolvedModel>> {
   const parsed = parseModelReference(reference);
   if (parsed === undefined) {
-    return failed(role, "model", "invalid-reference");
+    return failed(subject, "model", "invalid-reference");
   }
 
   const catalog = await loadCatalog();
   if (!catalog.ok) {
-    return failed(role, "catalog", "catalog-unavailable");
+    return failed(subject, "catalog", "catalog-unavailable");
   }
 
   const match = findUniqueModel(catalog.models, parsed);
   if (match.kind === "missing") {
-    return failed(role, "model", "model-not-found");
+    return failed(subject, "model", "model-not-found");
   }
   if (match.kind === "ambiguous") {
-    return failed(role, "model", "ambiguous-model");
+    return failed(subject, "model", "ambiguous-model");
   }
   const { model } = match;
   if (!model.enabled) {
-    return failed(role, "model", "model-disabled");
+    return failed(subject, "model", "model-disabled");
   }
   if (hasDuplicateVariantIDs(model.variants)) {
-    return failed(role, "variant", "ambiguous-variant");
+    return failed(subject, "variant", "ambiguous-variant");
   }
 
   let inlineVariant: ThinkingVariant | undefined;
@@ -257,27 +395,11 @@ async function resolveConfiguredRole(
       (candidate) => candidate.id === parsed.variant,
     );
     if (inlineVariant === undefined) {
-      return failed(role, "variant", "variant-not-found");
+      return failed(subject, "variant", "variant-not-found");
     }
   }
 
-  const requirement = thinkingRequirement(thinking);
-  if (!requirement.ok) {
-    return failed(role, "thinking", requirement.code);
-  }
-  const selected = selectThinkingVariant(
-    model,
-    requirement.requirement,
-    inlineVariant,
-  );
-  if (!selected.ok) {
-    return failed(role, "thinking", selected.code);
-  }
-
-  return {
-    ok: true,
-    selection: { role, model: parsed, thinking: selected.selection },
-  };
+  return { ok: true, value: { reference: parsed, model, inlineVariant } };
 }
 
 // Mirrors the host's Model.Ref grammar (packages/schema/src/model.ts, blob b52018f9): the first
@@ -463,11 +585,11 @@ function onceAsync<T>(load: () => Promise<T>): () => Promise<T> {
 }
 
 function failed(
-  role: RoleKey,
+  subject: IssueSubject,
   field: ValidationIssue["field"],
   code: ValidationCode,
-): RoleResult {
-  return { ok: false, issues: [{ role, field, code }] };
+): { readonly ok: false; readonly issue: ValidationIssue } {
+  return { ok: false, issue: { ...subject, field, code } };
 }
 
 function unreadableValidation(): DelegationValidation {

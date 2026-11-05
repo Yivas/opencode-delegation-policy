@@ -1,11 +1,13 @@
 import {
   type AdvisorMode,
+  type AdvisorsSetting,
   type GlobalPreferences,
   type Intensity,
   mapRoles,
   type Preference,
   type RoleKey,
   type RoleSetting,
+  type SessionAdvisorsSetting,
   type SessionPreferences,
   type SessionRoleSetting,
   type SessionThinkingSetting,
@@ -20,6 +22,7 @@ export type EffectivePreferences = {
   readonly advisorMode: AdvisorMode;
   readonly roles: Readonly<Record<RoleKey, RoleSetting>>;
   readonly thinking: Readonly<Record<RoleKey, ThinkingSetting>>;
+  readonly advisors: AdvisorsSetting;
 };
 
 export type PreferenceProvenance = {
@@ -28,6 +31,7 @@ export type PreferenceProvenance = {
   readonly advisorMode: PreferenceSource;
   readonly roles: Readonly<Record<RoleKey, PreferenceSource>>;
   readonly thinking: Readonly<Record<RoleKey, PreferenceSource>>;
+  readonly advisors: PreferenceSource;
 };
 
 export type PreferenceView = {
@@ -56,6 +60,7 @@ export const BUILT_IN_GLOBAL_PREFERENCES: GlobalPreferences = deepFreeze({
   advisorMode: "with-delegation",
   roles: mapRoles<RoleSetting>(() => ({ kind: "unset" })),
   thinking: mapRoles<ThinkingSetting>(() => ({ kind: "unset" })),
+  advisors: { kind: "unset" },
 });
 
 export const INHERITING_SESSION_PREFERENCES: SessionPreferences = deepFreeze({
@@ -65,6 +70,7 @@ export const INHERITING_SESSION_PREFERENCES: SessionPreferences = deepFreeze({
   advisorMode: "inherit",
   roles: mapRoles<SessionRoleSetting>(() => ({ kind: "inherit" })),
   thinking: mapRoles<SessionThinkingSetting>(() => ({ kind: "inherit" })),
+  advisors: { kind: "inherit" },
 });
 
 // A session never reads its parent's override: child sessions resolve against the
@@ -99,6 +105,11 @@ export function resolvePreferences(
   const thinking = mapRoles((role) =>
     resolveThinking(override.thinking[role], base.thinking[role], baseSource),
   );
+  const advisors = resolveAdvisors(
+    override.advisors,
+    base.advisors,
+    baseSource,
+  );
 
   return {
     preferences: {
@@ -107,6 +118,7 @@ export function resolvePreferences(
       advisorMode: advisorMode.value,
       roles: mapRoles((role) => roles[role].value),
       thinking: mapRoles((role) => thinking[role].value),
+      advisors: advisors.value,
     },
     provenance: {
       intensity: intensity.source,
@@ -114,6 +126,7 @@ export function resolvePreferences(
       advisorMode: advisorMode.source,
       roles: mapRoles((role) => roles[role].source),
       thinking: mapRoles((role) => thinking[role].source),
+      advisors: advisors.source,
     },
   };
 }
@@ -143,6 +156,22 @@ function resolveRole(
     return { value: { ...baseValue }, source: baseSource };
   }
   return { value: { ...overrideValue }, source: "session" };
+}
+
+function resolveAdvisors(
+  overrideValue: SessionAdvisorsSetting,
+  baseValue: AdvisorsSetting,
+  baseSource: Exclude<PreferenceSource, "session">,
+): Resolved<AdvisorsSetting> {
+  const value = overrideValue.kind === "inherit" ? baseValue : overrideValue;
+  const copy: AdvisorsSetting =
+    value.kind === "configured"
+      ? { kind: "configured", models: [...value.models] }
+      : { kind: value.kind };
+  return {
+    value: copy,
+    source: overrideValue.kind === "inherit" ? baseSource : "session",
+  };
 }
 
 function resolveThinking(

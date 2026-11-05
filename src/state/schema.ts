@@ -1,6 +1,8 @@
 // Product-owned schema for delegation preferences. It is not a copy of Pi's persisted
 // schemas: OpenCode stores these documents through ctx.storage, so the plugin defines its
-// own version 1 and rejects anything it cannot read exactly.
+// own version 1 and rejects anything it cannot read exactly. Nothing has been released yet,
+// so version 1 still changes in place (for example, the Advisor list replaced the single
+// Advisor role) and older development documents are rejected as corrupt, not migrated.
 
 export const CURRENT_SCHEMA_VERSION = 1;
 
@@ -18,14 +20,12 @@ export type Preference = (typeof PREFERENCES)[number];
 export const ADVISOR_MODES = ["off", "on", "with-delegation"] as const;
 export type AdvisorMode = (typeof ADVISOR_MODES)[number];
 
-export const ROLE_KEYS = [
-  "small",
-  "medium",
-  "large",
-  "visualDesign",
-  "advisor",
-] as const;
+export const ROLE_KEYS = ["small", "medium", "large", "visualDesign"] as const;
 export type RoleKey = (typeof ROLE_KEYS)[number];
+
+// Advisors are an ordered list, not a role: every valid entry gets the same question. They have no
+// thinking policy; a model reference may carry a `#variant` the user picked as the default.
+export const MAX_ADVISORS = 3;
 
 // Model references and thinking levels are bounded text here. Their syntax and whether the
 // host offers them are checked by the model validator, which reports an axis error instead
@@ -49,6 +49,15 @@ export type InheritMarker = { readonly kind: "inherit" };
 export type SessionRoleSetting = RoleSetting | InheritMarker;
 export type SessionThinkingSetting = ThinkingSetting | InheritMarker;
 
+// "disabled" is an explicit choice and differs from "unset": with-delegation treats both as off,
+// but "on" reports a missing list for either. A session value of any kind other than "inherit"
+// replaces the global setting, as role settings do.
+export type AdvisorsSetting =
+  | { readonly kind: "unset" }
+  | { readonly kind: "disabled" }
+  | { readonly kind: "configured"; readonly models: readonly string[] };
+export type SessionAdvisorsSetting = AdvisorsSetting | InheritMarker;
+
 export type GlobalPreferences = {
   readonly schemaVersion: typeof CURRENT_SCHEMA_VERSION;
   readonly intensity: Intensity;
@@ -56,6 +65,7 @@ export type GlobalPreferences = {
   readonly advisorMode: AdvisorMode;
   readonly roles: Readonly<Record<RoleKey, RoleSetting>>;
   readonly thinking: Readonly<Record<RoleKey, ThinkingSetting>>;
+  readonly advisors: AdvisorsSetting;
 };
 
 export type SessionPreferences = {
@@ -65,15 +75,18 @@ export type SessionPreferences = {
   readonly advisorMode: AdvisorMode | "inherit";
   readonly roles: Readonly<Record<RoleKey, SessionRoleSetting>>;
   readonly thinking: Readonly<Record<RoleKey, SessionThinkingSetting>>;
+  readonly advisors: SessionAdvisorsSetting;
 };
 
-// Omitted keys keep their current value. An undefined value is not a valid setting.
+// Omitted keys keep their current value. An undefined value is not a valid setting. `advisors`
+// replaces the whole setting: entries are never merged one by one.
 export type GlobalPreferenceChange = {
   readonly intensity?: Intensity;
   readonly preference?: Preference;
   readonly advisorMode?: AdvisorMode;
   readonly roles?: Readonly<Partial<Record<RoleKey, RoleSetting>>>;
   readonly thinking?: Readonly<Partial<Record<RoleKey, ThinkingSetting>>>;
+  readonly advisors?: AdvisorsSetting;
 };
 
 export type SessionPreferenceChange = {
@@ -84,6 +97,7 @@ export type SessionPreferenceChange = {
   readonly thinking?: Readonly<
     Partial<Record<RoleKey, SessionThinkingSetting>>
   >;
+  readonly advisors?: SessionAdvisorsSetting;
 };
 
 export type PreferenceStateErrorCode =
@@ -131,6 +145,7 @@ const DOCUMENT_KEYS = [
   "advisorMode",
   "roles",
   "thinking",
+  "advisors",
 ] as const;
 
 const SESSION_INTENSITIES = [...INTENSITIES, "inherit"] as const;
@@ -146,7 +161,6 @@ export function mapRoles<T>(mapRole: (role: RoleKey) => T): Record<RoleKey, T> {
     medium: mapRole("medium"),
     large: mapRole("large"),
     visualDesign: mapRole("visualDesign"),
-    advisor: mapRole("advisor"),
   };
 }
 
@@ -179,6 +193,7 @@ export function parseGlobalPreferences(
       "thinking",
       parseThinkingSetting,
     ),
+    advisors: parseAdvisorsSetting(record.advisors, context, "advisors"),
   };
 }
 
@@ -216,6 +231,7 @@ export function parseSessionPreferences(
       "thinking",
       parseSessionThinkingSetting,
     ),
+    advisors: parseSessionAdvisorsSetting(record.advisors, context, "advisors"),
   };
 }
 
@@ -225,6 +241,7 @@ const CHANGE_KEYS = [
   "advisorMode",
   "roles",
   "thinking",
+  "advisors",
 ] as const;
 
 // A change is caller input and may later arrive as untrusted JSON, so it is checked before it
@@ -372,6 +389,60 @@ function parseSessionRoleSetting(
     return { kind: "inherit" };
   }
   return parseRoleSetting(value, context, path);
+}
+
+// Order is the Advisor number and duplicates are kept: two equal entries mean two consultations.
+function parseAdvisorsSetting(
+  value: unknown,
+  context: ParseContext,
+  path: string,
+): AdvisorsSetting {
+  const record = requireRecord(value, context, path);
+  const kind = parseEnum(
+    record.kind,
+    ROLE_SETTING_KINDS,
+    context,
+    `${path}.kind`,
+  );
+
+  if (kind === "configured") {
+    requireKeys(record, ["kind", "models"], ["kind", "models"], context, path);
+    const models = record.models;
+    if (
+      !Array.isArray(models) ||
+      models.length === 0 ||
+      models.length > MAX_ADVISORS
+    ) {
+      fail(context, `${path}.models`, `expected 1 to ${MAX_ADVISORS} entries`);
+    }
+    // Array.from visits holes as undefined, so a sparse array fails like any missing entry.
+    return {
+      kind,
+      models: Array.from(models, (model: unknown, index) =>
+        parseText(
+          model,
+          MAX_MODEL_REFERENCE_LENGTH,
+          context,
+          `${path}.models.${index}`,
+        ),
+      ),
+    };
+  }
+
+  requireKeys(record, ["kind"], ["kind"], context, path);
+  return kind === "unset" ? { kind: "unset" } : { kind: "disabled" };
+}
+
+function parseSessionAdvisorsSetting(
+  value: unknown,
+  context: ParseContext,
+  path: string,
+): SessionAdvisorsSetting {
+  if (isInheritRecord(value)) {
+    requireKeys(value, ["kind"], ["kind"], context, path);
+    return { kind: "inherit" };
+  }
+  return parseAdvisorsSetting(value, context, path);
 }
 
 function parseThinkingSetting(
