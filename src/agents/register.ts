@@ -2,12 +2,11 @@ import type { Plugin } from "@opencode/plugin";
 
 import type { RoleKey } from "../state/schema.js";
 import type { AdvisorSelection, RoleSelection } from "../validation/models.js";
-import { ADVISOR_DENIED_ACTIONS } from "./safety.js";
-
-// Product-owned agent ids. These exact ids are managed by the plugin: the editor has no owner field
-// and no `add`, so registration upserts them. Nothing else is touched, and no other `ocv2-` id is
-// claimed.
-export const AGENT_PREFIX = "ocv2-";
+import {
+  ADVISOR_DENIED_ACTIONS,
+  AGENT_PREFIX,
+  type AgentPermission,
+} from "./ids.js";
 
 // Typed by RoleKey on purpose: adding a role without an entry here becomes a compile error instead
 // of an agent that is silently never registered.
@@ -39,12 +38,6 @@ export type AgentModel = {
   readonly providerID: string;
   readonly id: string;
   readonly variant?: string;
-};
-
-export type AgentPermission = {
-  readonly action: string;
-  readonly resource: string;
-  readonly effect: "allow" | "deny" | "ask";
 };
 
 export type AgentDefinition = {

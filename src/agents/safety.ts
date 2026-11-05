@@ -1,8 +1,9 @@
 import {
-  AGENT_PREFIX,
-  type AgentDefinition,
+  ADVISOR_DENIED_ACTIONS,
   type AgentPermission,
-} from "./register.js";
+  isAdvisorAgentID,
+} from "./ids.js";
+import type { AgentDefinition } from "./register.js";
 
 // The host applies `opencode.config.agent` after the plugin's transform and the last matching
 // permission rule wins, so the user's own configuration can append an `allow` after the advisor's
@@ -10,24 +11,6 @@ import {
 // safe answer is to read the effective agents afterwards and refuse to consult an advisor that
 // stopped being advice-only. This module is that check, and it is pure so the caller decides what
 // to do with the result.
-
-// Actions the host documents today. The wildcard rule covers anything else, and an action named by
-// the effective rules is checked too.
-const KNOWN_ACTIONS = [
-  "read",
-  "edit",
-  "shell",
-  "execute",
-  "subagent",
-  "skill",
-  "webfetch",
-  "websearch",
-  "external_directory",
-] as const;
-
-// One source for the deny list: the advisor registration and this check must agree, or an action
-// added in one place would silently stop being covered by the other.
-export const ADVISOR_DENIED_ACTIONS = KNOWN_ACTIONS;
 
 export type EffectiveAgent = {
   readonly id: string;
@@ -41,10 +24,6 @@ export type AdvisorSafetyIssue =
       readonly id: string;
       readonly actions: readonly string[];
     };
-
-export function isAdvisorAgentID(id: string): boolean {
-  return id.startsWith(`${AGENT_PREFIX}advisor-`);
-}
 
 // An advisor is safe only while every action still resolves to deny after the whole rule list is
 // applied. Anything that leaves part of an action's space open is reported: a later `allow` for one
@@ -81,7 +60,7 @@ export function advisorSafetyIssues(input: {
 export function actionsNotDenied(
   rules: readonly AgentPermission[],
 ): readonly string[] {
-  const candidates = new Set<string>([...KNOWN_ACTIONS, "*"]);
+  const candidates = new Set<string>([...ADVISOR_DENIED_ACTIONS, "*"]);
   for (const rule of rules) {
     candidates.add(rule.action);
   }
