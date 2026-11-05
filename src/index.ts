@@ -33,7 +33,7 @@ const delegationPolicy: Plugin.Plugin = {
       catalog: context.model,
       inspect: () => wiring.inspect(),
     };
-    let commandRegistration: { dispose: () => Promise<void> } | undefined;
+    let rpcRegistration: { dispose: () => Promise<void> } | undefined;
 
     // Each registration is retired on its own: one that refuses must not leave the others alive. A
     // handle that was retired is forgotten, so a retry does not dispose it twice. The first failure
@@ -47,11 +47,11 @@ const delegationPolicy: Plugin.Plugin = {
           failures.push(error);
         }
       };
-      const handle = commandRegistration;
+      const handle = rpcRegistration;
       if (handle !== undefined) {
         await attempt(async () => {
           await handle.dispose();
-          commandRegistration = undefined;
+          rpcRegistration = undefined;
         });
       }
       await attempt(() => wiring.dispose());
@@ -62,7 +62,7 @@ const delegationPolicy: Plugin.Plugin = {
     try {
       await provisioner.register();
       await wiring.register();
-      commandRegistration = await context.rpc.register(delegateRpc, {
+      rpcRegistration = await context.rpc.register(delegateRpc, {
         run: async (input) => {
           // The host checks the input against the contract before this runs, so anything else is a
           // defect and fails loudly instead of being read as an empty command.
@@ -77,7 +77,7 @@ const delegationPolicy: Plugin.Plugin = {
       });
     } catch (error) {
       // Registration may retain a handle after another setup step fails; retire all before failing.
-      // A retirement that fails is the error reported, as it was before the command existed: it means
+      // A retirement that fails is the error reported, as it was before the RPC existed: it means
       // something may still be registered, which matters more than why setup stopped.
       await retireAll();
       throw error;

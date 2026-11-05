@@ -2,8 +2,10 @@
 
 Delegation policy for OpenCode v2, with explicit roles and model selection.
 
-**Early implementation, not a usable plugin yet.** The typed entry, preference store and
-model/thinking validator have local unit tests. The entry does not yet apply policy, register agents or expose a terminal interface.
+**Early implementation, not a usable plugin yet.** The typed entry, preference store,
+model/thinking validator, agent registration and a minimal `/delegate` command in the terminal
+interface have local unit tests. The plugin does not yet apply delegation policy to the conversation,
+and none of it has run against a real OpenCode host.
 There is no published package or verified OpenCode compatibility. Do not install this checkout in
 your personal OpenCode configuration.
 

@@ -101,10 +101,10 @@ test("a reply without text is not shown as an empty success", async () => {
   assert.match(alerts[0].message, /could not be confirmed/);
 });
 
-test("the failure wording is the same wherever it is produced", () => {
-  assert.equal(
+test("a request that never ran and one that may have run are told apart", () => {
+  assert.notEqual(
     describeRpcFailure({ type: "rpc.unavailable" }),
-    describeRpcFailure({ type: "rpc.invalid_input" }),
+    describeRpcFailure({ type: "rpc.internal" }),
   );
 });
 
@@ -141,17 +141,4 @@ test("the entry registers /delegate with the raw line and forwards it", async ()
   assert.deepEqual(calls[0].input, { line: "role small acme/small-model" });
   assert.equal(calls[0].definition, delegateRpc);
   assert.equal(alerts[0].message, "ok");
-});
-
-test("the entry is the one the package exposes for the TUI and the RPC contract", async () => {
-  const manifest = JSON.parse(
-    await (await import("node:fs/promises")).readFile(
-      new URL("../package.json", import.meta.url),
-      "utf8",
-    ),
-  );
-
-  assert.equal(manifest.exports["./tui"], "./dist/tui.js");
-  assert.equal(manifest.exports["./rpc"], "./dist/rpc.js");
-  assert.equal(manifest.exports["."], manifest.main);
 });

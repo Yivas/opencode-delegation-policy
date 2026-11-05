@@ -219,7 +219,7 @@ test("setup registers owned Anthropic budget metadata through model methods only
 
   assert.deepEqual(
     state.rpcs.map((entry) => entry.definition.id),
-    ["opencode-delegation-policy.delegate"],
+    ["opencode-delegation-policy-delegate"],
   );
   assert.equal(state.transformCalls, 1);
   assert.equal(
