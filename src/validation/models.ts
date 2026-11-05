@@ -52,6 +52,9 @@ export type ValidationCode =
   | "model-disabled"
   | "variant-not-found"
   | "ambiguous-variant"
+  // Valid for the session, but the host has no agent for it with that model: agents come from the
+  // defaults when OpenCode starts.
+  | "agent-not-registered"
   | ThinkingIssueCode;
 
 // Carries no raw value, overlay, header or host message: only where the problem is and what kind.

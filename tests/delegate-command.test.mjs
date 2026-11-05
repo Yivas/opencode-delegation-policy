@@ -309,7 +309,7 @@ test("reset turns the session off and clear brings back the defaults", async () 
   assert.equal(cleared.provenance.intensity, "global");
 });
 
-test("a session command without a session, or for one that is gone, writes nothing", async () => {
+test("a session command without a session, or for one the host cannot confirm, writes nothing", async () => {
   const { storage, ports } = setup();
 
   const home = await runDelegate("normal", ports);
@@ -320,8 +320,47 @@ test("a session command without a session, or for one that is gone, writes nothi
     { ...ports, sessionExists: async () => false },
     { sessionID: "old" },
   );
-  assert.match(gone, /no longer exists; nothing was changed/);
+  // A failed lookup is not proof the session was deleted, so the reply does not claim it.
+  assert.match(
+    gone,
+    /could not confirm that session exists; nothing was changed/,
+  );
   assert.equal(storage.records.size, 0);
+});
+
+test("command words are case-insensitive, model references are kept as typed", async () => {
+  const { store, ports } = setup();
+
+  await runDelegate("NORMAL", ports, { sessionID: "ses" });
+  await runDelegate("Advisor ON", ports, { sessionID: "ses" });
+  await runDelegate("Defaults Role Small Acme/Small-Model#High", ports);
+  await runDelegate("DEFAULTS ROLE MEDIUM OFF", ports);
+
+  const session = await store.readSession("ses");
+  assert.equal(session.preferences.intensity, "normal");
+  assert.equal(session.preferences.advisorMode, "on");
+  const defaults = await store.readGlobal();
+  assert.deepEqual(defaults.preferences.roles.small, {
+    kind: "configured",
+    model: "Acme/Small-Model#High",
+  });
+  assert.deepEqual(defaults.preferences.roles.medium, { kind: "disabled" });
+});
+
+test("a malformed thinking range is refused and the previous policy stays", async () => {
+  const { store, ports } = setup();
+  await runDelegate("defaults thinking small low..high", ports);
+
+  for (const value of ["low..", "..high", "low..mid..high", ".."]) {
+    const text = await runDelegate(`defaults thinking small ${value}`, ports);
+    assert.match(text, /Usage/, value);
+  }
+
+  assert.deepEqual((await store.readGlobal()).preferences.thinking.small, {
+    kind: "range",
+    from: "low",
+    to: "high",
+  });
 });
 
 test("the status without a session shows the defaults, and with one the session", async () => {

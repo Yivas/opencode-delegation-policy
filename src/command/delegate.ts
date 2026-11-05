@@ -1,4 +1,6 @@
+import type { AgentDefinition } from "../agents/register.js";
 import type { InjectionReport } from "../policy/inject.js";
+import { restrictToRegistered } from "../policy/registered.js";
 import type { AgentInspection } from "../setup.js";
 import type { PreferenceSource, PreferenceView } from "../state/effective.js";
 import {
@@ -45,6 +47,9 @@ export type DelegateCommandPorts = {
   // The check of the agents the host actually ended up with. Without it the status has nothing to
   // say about them, and says so instead of looking clean.
   readonly inspect?: () => Promise<AgentInspection>;
+  // The agents the host was given. The checks below are made against them, because the policy only
+  // names what is registered.
+  readonly agents?: () => readonly AgentDefinition[];
   // What happened to the policy block on the latest request of the main agent.
   readonly injection?: () => InjectionReport;
 };
@@ -147,7 +152,8 @@ export async function runDelegate(
           ports.sessionExists !== undefined &&
           !(await ports.sessionExists(sessionID))
         ) {
-          return "That session no longer exists; nothing was changed.";
+          // A failed lookup and a deleted session look the same from here, so neither is claimed.
+          return "The host could not confirm that session exists; nothing was changed.";
         }
         const view =
           request.kind === "reset"
@@ -177,7 +183,10 @@ export async function runDelegate(
 // Returns what to do, or the reason the input cannot be understood. Nothing is written for input
 // that is not understood.
 function parseRequest(line: string): Request | string {
-  const [first, ...rest] = line.trim().split(/\s+/).filter(Boolean);
+  // Command words and named values are case-insensitive, as in Pi. Model references are not touched:
+  // provider and model ids are matched exactly by the validator.
+  const [typed, ...rest] = line.trim().split(/\s+/).filter(Boolean);
+  const first = typed?.toLowerCase();
   if (first === undefined || (first === "status" && rest.length === 0)) {
     return { kind: "status" };
   }
@@ -188,14 +197,16 @@ function parseRequest(line: string): Request | string {
     return { kind: "session", change: { intensity: first } };
   }
   if (first === "advisor") {
-    const [mode, ...extra] = rest;
+    const [typedMode, ...extra] = rest;
+    const mode = typedMode?.toLowerCase();
     if (!isOneOf(ADVISOR_MODES, mode) || extra.length > 0) {
       return `advisor takes one of: ${ADVISOR_MODES.join(", ")}.`;
     }
     return { kind: "session", change: { advisorMode: mode } };
   }
   if (first === "preference") {
-    const [value, ...extra] = rest;
+    const [typedValue, ...extra] = rest;
+    const value = typedValue?.toLowerCase();
     if (!isOneOf(PREFERENCES, value) || extra.length > 0) {
       return `preference takes one of: ${PREFERENCES.join(", ")}.`;
     }
@@ -204,10 +215,15 @@ function parseRequest(line: string): Request | string {
   if (first === "defaults") {
     const [setting, ...values] = rest;
     if (setting === undefined) return "defaults needs a setting.";
-    const change = parseDefaultsChange(setting, values);
+    const change = parseDefaultsChange(setting.toLowerCase(), values);
     return typeof change === "string" ? change : { kind: "defaults", change };
   }
-  return `Unknown subcommand "${first}".`;
+  return `Unknown subcommand "${typed}".`;
+}
+
+// Lower-cases a named value; a model reference passes through as typed.
+function named(value: string | undefined): string | undefined {
+  return value?.toLowerCase();
 }
 
 function parseDefaultsChange(
@@ -216,21 +232,24 @@ function parseDefaultsChange(
 ): GlobalPreferenceChange | string {
   switch (setting) {
     case "intensity": {
-      const [value, ...extra] = rest;
+      const [typed, ...extra] = rest;
+      const value = named(typed);
       if (!isOneOf(INTENSITIES, value) || extra.length > 0) {
         return `defaults intensity takes one of: ${INTENSITIES.join(", ")}.`;
       }
       return { intensity: value };
     }
     case "advisor-mode": {
-      const [value, ...extra] = rest;
+      const [typed, ...extra] = rest;
+      const value = named(typed);
       if (!isOneOf(ADVISOR_MODES, value) || extra.length > 0) {
         return `defaults advisor-mode takes one of: ${ADVISOR_MODES.join(", ")}.`;
       }
       return { advisorMode: value };
     }
     case "preference": {
-      const [value, ...extra] = rest;
+      const [typed, ...extra] = rest;
+      const value = named(typed);
       if (!isOneOf(PREFERENCES, value) || extra.length > 0) {
         return `defaults preference takes one of: ${PREFERENCES.join(", ")}.`;
       }
@@ -238,7 +257,7 @@ function parseDefaultsChange(
     }
     case "role": {
       const [name, value, ...extra] = rest;
-      const key = roleKeyFor(name);
+      const key = roleKeyFor(named(name));
       if (key === undefined || value === undefined || extra.length > 0) {
         return `defaults role takes a name (${ROLE_LIST}) and a model, off or unset.`;
       }
@@ -246,14 +265,17 @@ function parseDefaultsChange(
     }
     case "thinking": {
       const [name, value, ...extra] = rest;
-      const key = roleKeyFor(name);
-      if (key === undefined || value === undefined || extra.length > 0) {
+      const key = roleKeyFor(named(name));
+      const setting = value === undefined ? undefined : thinkingSetting(value);
+      if (key === undefined || setting === undefined || extra.length > 0) {
         return `defaults thinking takes a name (${ROLE_LIST}) and a level, a range from..to, or unset.`;
       }
-      return { thinking: { [key]: thinkingSetting(value) } };
+      return { thinking: { [key]: setting } };
     }
     case "advisors": {
-      const keyword = rest.find((word) => word === "off" || word === "unset");
+      const keyword = rest
+        .map((word) => word.toLowerCase())
+        .find((word) => word === "off" || word === "unset");
       if (keyword !== undefined) {
         // A keyword mixed with models would be saved as a model reference called "off".
         if (rest.length > 1) {
@@ -277,20 +299,24 @@ function parseDefaultsChange(
 }
 
 function roleSetting(value: string): RoleSetting {
-  if (value === "off") return { kind: "disabled" };
-  if (value === "unset") return { kind: "unset" };
+  const word = value.toLowerCase();
+  if (word === "off") return { kind: "disabled" };
+  if (word === "unset") return { kind: "unset" };
   return { kind: "configured", model: value };
 }
 
 // Whether a level exists is the validator's question, which reports it on the next status; here the
-// text only has to say which shape the user meant.
-function thinkingSetting(value: string): ThinkingSetting {
-  if (value === "unset") return { kind: "unset" };
-  const range = value.split("..");
-  if (range.length === 2 && range[0] !== "" && range[1] !== "") {
-    return { kind: "range", from: range[0] ?? "", to: range[1] ?? "" };
+// text only has to say which shape the user meant. Anything with ".." is a range, and a range with a
+// missing or extra bound is refused rather than saved as a level with dots in it.
+function thinkingSetting(value: string): ThinkingSetting | undefined {
+  const word = value.toLowerCase();
+  if (word === "unset") return { kind: "unset" };
+  if (!word.includes("..")) return { kind: "fixed", level: word };
+  const [from, to, ...extra] = word.split("..");
+  if (from === undefined || to === undefined || from === "" || to === "") {
+    return undefined;
   }
-  return { kind: "fixed", level: value };
+  return extra.length > 0 ? undefined : { kind: "range", from, to };
 }
 
 function isOneOf<T extends string>(
@@ -332,7 +358,9 @@ async function report(
   // Saving a value the catalogue does not offer is allowed (a provider may simply be offline), so
   // what the settings actually do is reported separately and never hidden. The validator turns a
   // catalogue failure into its own result; anything it throws is a defect and is not swallowed.
-  lines.push(...(await describeValidation(preferences, ports.catalog)));
+  lines.push(
+    ...(await describeValidation(preferences, ports.catalog, ports.agents)),
+  );
   lines.push(...(await describeAgents(ports.inspect)));
   lines.push(describeInjection(ports.injection));
   lines.push(
@@ -363,11 +391,13 @@ function describeAdvisors(
 async function describeValidation(
   preferences: PreferenceView["preferences"],
   catalog: ModelCatalog,
+  agents: DelegateCommandPorts["agents"],
 ): Promise<string[]> {
-  const { delegation, advisor } = await validatePreferenceAxes({
-    preferences,
-    catalog,
-  });
+  const validated = await validatePreferenceAxes({ preferences, catalog });
+  const { delegation, advisor } =
+    agents === undefined
+      ? validated
+      : restrictToRegistered(validated, agents());
   const lines: string[] = [];
 
   lines.push(
@@ -389,6 +419,17 @@ async function describeValidation(
     for (const warning of advisor.warnings) {
       lines.push(`  warning: ${describeIssue(warning)}`);
     }
+  }
+  const issues = [
+    ...(delegation.status === "error" ? delegation.issues : []),
+    ...(advisor.status === "error" || advisor.status === "partial"
+      ? advisor.issues
+      : []),
+  ];
+  if (issues.some((issue) => issue.code === "agent-not-registered")) {
+    lines.push(
+      "  Agents exist only for what the defaults defined when OpenCode started: set these with /delegate defaults and restart OpenCode.",
+    );
   }
   return lines;
 }

@@ -58,10 +58,23 @@ async function activeStore() {
   return { storage, store };
 }
 
-function sessions(parents = {}) {
+// The agents a start with the defaults below would register. The block may only name these.
+const REGISTERED = [
+  {
+    id: "ocv2-small",
+    model: { providerID: "acme", id: "small-model" },
+  },
+  {
+    id: "ocv2-advisor-1",
+    model: { providerID: "acme", id: "small-model" },
+  },
+];
+
+function sessions(parents = {}, agents = REGISTERED) {
   const lookups = [];
   return {
     lookups,
+    agents: () => agents,
     session: async (sessionID) => {
       lookups.push(sessionID);
       if (parents[sessionID] === "fail") throw new Error("host detail");
@@ -232,6 +245,42 @@ test("an unexpected error leaves no block and names only its kind", async () => 
     reason: "unexpected-error",
     kind: "RangeError",
   });
+});
+
+test("a session cannot make the policy name an agent the host was never given", async () => {
+  const { store } = await activeStore();
+  // Defaults were off when OpenCode started, so nothing was registered; the session turned it on.
+  const injector = createPolicyInjector({
+    store,
+    catalog,
+    ...sessions({}, []),
+  });
+  const system = [];
+
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  assert.deepEqual(system, []);
+  assert.deepEqual(injector.last(), {
+    outcome: "skipped",
+    reason: "nothing-active",
+  });
+});
+
+test("an agent created with another model is not named either", async () => {
+  const { store } = await activeStore();
+  const stale = [
+    { id: "ocv2-small", model: { providerID: "acme", id: "old" } },
+  ];
+  const injector = createPolicyInjector({
+    store,
+    catalog,
+    ...sessions({}, stale),
+  });
+  const system = [];
+
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  assert.deepEqual(system, []);
 });
 
 test("a block left by an earlier version is recognised by its marker and replaced", () => {

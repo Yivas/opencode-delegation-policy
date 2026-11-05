@@ -366,11 +366,11 @@ test("setup hooks the main agent's requests only, and retires the hook", async (
   assert.equal(state.hooks.length, 0);
 });
 
-test("defaults saved through /delegate reach the next request of the main agent", async () => {
+test("defaults saved through /delegate reach the main agent after a restart, not before", async () => {
   const { context, state } = setupContext([eligible({ enabled: true })]);
-  await delegationPolicy.setup(context);
-  const [{ handlers }] = state.rpcs;
-  const [{ callback }] = state.hooks;
+  const cleanup = await delegationPolicy.setup(context);
+  let [{ handlers }] = state.rpcs;
+  let [{ callback }] = state.hooks;
   const request = () => ({
     sessionID: "root",
     agent: "build",
@@ -390,6 +390,21 @@ test("defaults saved through /delegate reach the next request of the main agent"
   ]) {
     await handlers.run({ line });
   }
+
+  // The agents were created at start, with delegation off, so there is still nothing to name.
+  const unregistered = request();
+  await callback(unregistered);
+  assert.equal(unregistered.system.length, 1);
+  assert.match(
+    (await handlers.run({ line: "" })).text,
+    /role small: agent-not-registered[\s\S]*restart OpenCode/,
+  );
+
+  // A restart over the same storage registers them, and the next request names them.
+  await cleanup();
+  await delegationPolicy.setup(context);
+  [{ handlers }] = state.rpcs;
+  [{ callback }] = state.hooks;
   const after = request();
   await callback(after);
 

@@ -35,8 +35,8 @@ export function describeRpcFailure(error: unknown): string {
   }
   // The handler may have run before the failure, so neither "saved" nor "not saved" is true to say.
   return [
-    "The result could not be confirmed, so the saved defaults may or may not have changed.",
-    "Run /delegate status to see what is saved.",
+    "The result could not be confirmed, so the settings it touched may or may not have changed.",
+    "Run /delegate status in this session to see the session, or from the home screen to see the defaults.",
   ].join("\n");
 }
 

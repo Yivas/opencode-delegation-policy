@@ -40,6 +40,9 @@ export type Wiring = {
   // stopped being advice-only and any agent under the plugin's prefix that the current configuration
   // no longer defines. The caller decides what to do with each result.
   inspect(): Promise<AgentInspection>;
+  // The agents this plugin has handed to the host, empty until the first registration. The policy
+  // may only name these: a session can turn delegation on, but it cannot create an agent.
+  agents(): readonly AgentDefinition[];
   dispose(): Promise<void>;
 };
 
@@ -116,6 +119,8 @@ export function createWiring(ports: HostPorts): Wiring {
       registered = true;
       state = "registered";
     },
+
+    agents: () => (registered ? definitions() : []),
 
     async inspect() {
       // Before the plugin registered anything there is nothing to compare against: the host cannot

@@ -1,10 +1,12 @@
 import { reservedAgentIDs } from "../agents/ids.js";
+import type { AgentDefinition } from "../agents/register.js";
 import { PreferenceStateError } from "../state/schema.js";
 import type { PreferenceStore } from "../state/store.js";
 import {
   type ModelCatalog,
   validatePreferenceAxes,
 } from "../validation/models.js";
+import { restrictToRegistered } from "./registered.js";
 import { OWNED_MARKER, renderDelegationPolicy } from "./render.js";
 
 // Puts the policy block into the main agent's requests, and nowhere else. It only edits the system
@@ -95,6 +97,8 @@ export type InjectorPorts = {
   readonly session: (
     sessionID: string,
   ) => Promise<{ readonly parentID?: string | undefined }>;
+  // The agents the host was given. The block names only these, whatever the session turned on.
+  readonly agents: () => readonly AgentDefinition[];
 };
 
 export type PolicyInjector = {
@@ -158,10 +162,13 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
         const { preferences } = await ports.store.readSession(
           request.sessionID,
         );
-        const validation = await validatePreferenceAxes({
-          preferences,
-          catalog: ports.catalog,
-        });
+        const validation = restrictToRegistered(
+          await validatePreferenceAxes({
+            preferences,
+            catalog: ports.catalog,
+          }),
+          ports.agents(),
+        );
         block = renderDelegationPolicy({ preferences, validation });
       } catch (error) {
         report =

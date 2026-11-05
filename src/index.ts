@@ -33,11 +33,13 @@ const delegationPolicy: Plugin.Plugin = {
       store: wiring.store,
       catalog: context.model,
       session: (sessionID) => context.session.get({ sessionID }),
+      agents: () => wiring.agents(),
     });
     const delegatePorts = {
       store: wiring.store,
       catalog: context.model,
       inspect: () => wiring.inspect(),
+      agents: () => wiring.agents(),
       injection: () => injector.last(),
       // A lookup that fails is read as "gone": nothing is written for a session the host cannot find.
       sessionExists: (sessionID: string) =>
