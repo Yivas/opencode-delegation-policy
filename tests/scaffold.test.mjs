@@ -44,6 +44,8 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
     agentTransformCalls: 0,
     agents: new Map(),
     effectiveAgents: [],
+    commands: [],
+    synthetic: [],
   };
 
   const model = {
@@ -140,6 +142,28 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
       };
     },
   };
+  const command = {
+    async transform(callback) {
+      if (this !== command) {
+        throw new Error("command.transform lost its receiver");
+      }
+      callback({
+        add(definition) {
+          state.commands.push(definition);
+        },
+      });
+      return {
+        dispose: async () => {
+          state.commands.length = 0;
+        },
+      };
+    },
+  };
+  const session = {
+    async synthetic(input) {
+      state.synthetic.push(input);
+    },
+  };
   const context = new Proxy(
     {},
     {
@@ -147,6 +171,8 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
         if (key === "model") return model;
         if (key === "storage") return storage;
         if (key === "agent") return agent;
+        if (key === "command") return command;
+        if (key === "session") return session;
         throw new Error(`unexpected host domain access: ${String(key)}`);
       },
     },
@@ -203,6 +229,10 @@ test("setup registers owned Anthropic budget metadata through model methods only
   ]);
   const cleanup = await delegationPolicy.setup(context);
 
+  assert.deepEqual(
+    state.commands.map((command) => command.name),
+    ["delegate"],
+  );
   assert.equal(state.transformCalls, 1);
   assert.equal(
     state.listCalls,
@@ -234,6 +264,7 @@ test("setup registers owned Anthropic budget metadata through model methods only
 
   await cleanup();
   assert.equal(state.transforms.length, 0);
+  assert.equal(state.commands.length, 0);
 });
 
 test("setup failure retires its registration and keeps host errors opaque", async () => {
