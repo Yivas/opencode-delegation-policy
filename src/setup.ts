@@ -68,7 +68,6 @@ export function createWiring(ports: HostPorts): Wiring {
     agentDefinitions({
       roles: roleSelections,
       advisors: advisorSelections,
-      slots: true,
     });
 
   return {

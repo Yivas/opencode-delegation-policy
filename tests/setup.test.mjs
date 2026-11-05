@@ -87,17 +87,6 @@ function storagedefaults(records, defaults) {
   records.set("preferences.v1.global", JSON.stringify(defaults));
 }
 
-// Every reserved agent id, which registration now always fills.
-const SLOT_IDS = [
-  "ocv2-advisor-1",
-  "ocv2-advisor-2",
-  "ocv2-advisor-3",
-  "ocv2-large",
-  "ocv2-medium",
-  "ocv2-small",
-  "ocv2-visual-design",
-];
-
 // The advisor slots as the host reports them when nothing re-enabled an action.
 function deniedAdvisorSlots(numbers) {
   const deny = [{ action: "*", resource: "*", effect: "deny" }];
@@ -148,13 +137,15 @@ test("setup registers the roles and advisors of the global defaults", async () =
   await wiring.register();
   agent.rebuild();
 
-  // Every reserved slot is registered, so a role or advisor enabled only for a session still has an
-  // agent to launch; the unused ones carry no model and the advisors keep their deny list.
-  assert.deepEqual(SLOT_IDS, [...agent.agents.keys()].sort());
+  // Only what the global configuration defines is registered: no launchable agent exists for a role
+  // or advisor the user never configured.
+  assert.deepEqual([...agent.agents.keys()].sort(), [
+    "ocv2-advisor-1",
+    "ocv2-small",
+  ]);
   assert.equal(agent.agents.get("ocv2-small")?.model.id, "small-model");
   assert.equal(agent.agents.get("ocv2-advisor-1")?.mode, "subagent");
-  assert.equal(agent.agents.get("ocv2-medium")?.model, undefined);
-  assert.deepEqual(agent.agents.get("ocv2-advisor-3")?.permissions.at(-1), {
+  assert.deepEqual(agent.agents.get("ocv2-advisor-1")?.permissions.at(-1), {
     action: "*",
     resource: "*",
     effect: "deny",
@@ -176,11 +167,9 @@ test("a broken advisor model does not stop the roles from registering", async ()
   await wiring.register();
   agent.rebuild();
 
-  // The valid axis still registers, and the broken one leaves its slots without a model instead of
-  // taking the rest away.
-  assert.deepEqual(SLOT_IDS, [...agent.agents.keys()].sort());
+  // The valid axis registers; the broken one contributes nothing rather than taking the rest away.
+  assert.deepEqual([...agent.agents.keys()], ["ocv2-small"]);
   assert.equal(agent.agents.get("ocv2-small")?.model.id, "small-model");
-  assert.equal(agent.agents.get("ocv2-advisor-1")?.model, undefined);
 });
 
 test("an axis that stops validating keeps its agents instead of removing them", async () => {
@@ -197,15 +186,21 @@ test("an axis that stops validating keeps its agents instead of removing them", 
 
   await wiring.register();
   agent.rebuild();
-  assert.deepEqual(SLOT_IDS, [...agent.agents.keys()].sort());
+  assert.deepEqual([...agent.agents.keys()].sort(), [
+    "ocv2-advisor-1",
+    "ocv2-small",
+  ]);
 
-  // The advisor leaves the catalogue: its agent must survive, because a transient failure is not a
-  // reason to take away what the user configured.
+  // The advisor leaves the catalogue, so its axis cannot be validated; its agent stays as the last
+  // pass registered it, because a transient failure is not a reason to take it away.
   models = [model("acme", "small-model")];
   await wiring.register();
   agent.rebuild();
 
-  assert.deepEqual(SLOT_IDS, [...agent.agents.keys()].sort());
+  assert.deepEqual([...agent.agents.keys()].sort(), [
+    "ocv2-advisor-1",
+    "ocv2-small",
+  ]);
 });
 
 test("advisor safety reports an allow the host config appended", async () => {
@@ -284,8 +279,6 @@ test("an advisor missing from the effective catalog is reported", async () => {
 
   assert.deepEqual((await wiring.inspect()).advisors, [
     { kind: "unregistered", id: "ocv2-advisor-1" },
-    { kind: "unregistered", id: "ocv2-advisor-2" },
-    { kind: "unregistered", id: "ocv2-advisor-3" },
   ]);
 });
 
@@ -306,8 +299,6 @@ test("a malformed catalogue listing leaves advisor safety without effective agen
 
   assert.deepEqual((await wiring.inspect()).advisors, [
     { kind: "unregistered", id: "ocv2-advisor-1" },
-    { kind: "unregistered", id: "ocv2-advisor-2" },
-    { kind: "unregistered", id: "ocv2-advisor-3" },
   ]);
 });
 
@@ -324,9 +315,9 @@ test("an agent under the plugin's prefix that the configuration no longer define
     agentList: async () => ({
       data: [
         { id: "ocv2-small", permissions: [] },
-        ...deniedAdvisorSlots([1, 2, 3]),
-        // Left over from an earlier run, beyond the reserved slots.
-        { id: "ocv2-advisor-9", permissions: [] },
+        { id: "ocv2-advisor-1", permissions: [] },
+        // Left over from an earlier run, or an advisor the configuration dropped.
+        { id: "ocv2-advisor-2", permissions: [] },
         // Not ours: the plugin claims only its exact ids.
         { id: "my-own-agent", permissions: [] },
       ],
@@ -335,7 +326,7 @@ test("an agent under the plugin's prefix that the configuration no longer define
 
   await wiring.register();
 
-  assert.deepEqual((await wiring.inspect()).orphans, ["ocv2-advisor-9"]);
+  assert.deepEqual((await wiring.inspect()).orphans, ["ocv2-advisor-2"]);
 });
 
 test("an unreadable preference document leaves the plugin running and says why", async () => {

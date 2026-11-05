@@ -1,7 +1,6 @@
 import type { Plugin } from "@opencode/plugin";
 
 import type { RoleKey } from "../state/schema.js";
-import { MAX_ADVISORS } from "../state/schema.js";
 import type { AdvisorSelection, RoleSelection } from "../validation/models.js";
 import {
   ADVISOR_DENIED_ACTIONS,
@@ -48,7 +47,7 @@ export type AgentDefinition = {
   readonly description: string;
   readonly system: string;
   readonly mode: "subagent";
-  readonly model?: AgentModel;
+  readonly model: AgentModel;
   readonly permissions?: readonly AgentPermission[];
 };
 
@@ -87,49 +86,37 @@ const ROLE_SYSTEM =
 const ADVISOR_SYSTEM =
   "Provide advice only within the delegated question. Do not execute actions, use tools or claim to have performed them. Name missing evidence and material risks, and answer briefly.";
 
-// Every reserved id can be registered whether or not the global configuration uses it. A session may
-// enable a role or add an advisor that the defaults do not have, and a launch needs an agent to
-// exist; an agent without a model inherits the caller's, and the launch passes the exact one. The
-// advisor slots always carry the deny list, used or not.
+// A role or advisor is registered only when the global configuration defines it. Registering empty
+// slots looked convenient for a session that enables something the defaults do not have, but an
+// agent's permissions are global and fixed at setup, so a session can never make such a slot useful:
+// with base permissions it is a launchable side effect, and denied it is useless. An unconfigured
+// slot would also cost a model call on the caller's model, and neither a permission list nor the
+// policy text is an enforcement boundary. A session that needs a role or advisor needs a global
+// entry; the status says so.
 export function agentDefinitions(input: {
   readonly roles: readonly RoleSelection[];
   readonly advisors: readonly AdvisorSelection[];
-  readonly slots?: boolean;
 }): readonly AgentDefinition[] {
   const definitions: AgentDefinition[] = [];
-  const roleByKey = new Map(
-    input.roles.map((selection) => [selection.role, selection]),
-  );
-  const advisorByNumber = new Map(
-    input.advisors.map((selection) => [selection.advisor, selection]),
-  );
-  const roleKeys = input.slots
-    ? (Object.keys(ROLE_AGENTS) as RoleKey[])
-    : [...roleByKey.keys()];
-  for (const key of roleKeys) {
-    const { id, name } = ROLE_AGENTS[key];
-    const selection = roleByKey.get(key);
+  for (const selection of input.roles) {
+    const { id, name } = ROLE_AGENTS[selection.role];
     definitions.push({
       id,
       name,
       description: `OpenCode delegation role: ${name}.`,
       system: ROLE_SYSTEM,
       mode: "subagent",
-      ...(selection === undefined ? {} : { model: selectionModel(selection) }),
+      model: selectionModel(selection),
     });
   }
-  const advisorNumbers = input.slots
-    ? Array.from({ length: MAX_ADVISORS }, (_, index) => index + 1)
-    : [...advisorByNumber.keys()];
-  for (const number of advisorNumbers) {
-    const selection = advisorByNumber.get(number);
+  for (const selection of input.advisors) {
     definitions.push({
-      id: advisorAgentID(number),
-      name: `Advisor ${number}`,
-      description: `OpenCode delegation advisor ${number}: bounded advice, no actions.`,
+      id: advisorAgentID(selection.advisor),
+      name: `Advisor ${selection.advisor}`,
+      description: `OpenCode delegation advisor ${selection.advisor}: bounded advice, no actions.`,
       system: ADVISOR_SYSTEM,
       mode: "subagent",
-      ...(selection === undefined ? {} : { model: selection.launchModel }),
+      model: selection.launchModel,
       permissions: DENY_EVERYTHING,
     });
   }
@@ -170,11 +157,7 @@ export function applyDefinition(
   agent.mode = definition.mode;
   agent.hidden = false;
   // Copied, not shared: the definition's model can be the same object held in validation output.
-  // A slot without a model keeps the caller's, which is what an unused slot should inherit.
-  agent.model =
-    definition.model === undefined
-      ? undefined
-      : ({ ...definition.model } as unknown as WritableAgent["model"]);
+  agent.model = { ...definition.model } as unknown as WritableAgent["model"];
   if (definition.permissions !== undefined) {
     agent.permissions = [...definition.permissions];
   }
