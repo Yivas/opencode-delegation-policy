@@ -1,25 +1,12 @@
 import type { Plugin } from "@opencode/plugin";
 
-import type { RoleKey } from "../state/schema.js";
 import type { AdvisorSelection, RoleSelection } from "../validation/models.js";
 import {
   ADVISOR_DENIED_ACTIONS,
   advisorAgentID,
-  AGENT_PREFIX,
+  ROLE_AGENTS,
   type AgentPermission,
 } from "./ids.js";
-
-// Typed by RoleKey on purpose: adding a role without an entry here becomes a compile error instead
-// of an agent that is silently never registered.
-const ROLE_AGENTS: Readonly<Record<RoleKey, { id: string; name: string }>> = {
-  small: { id: `${AGENT_PREFIX}small`, name: "Small" },
-  medium: { id: `${AGENT_PREFIX}medium`, name: "Medium" },
-  large: { id: `${AGENT_PREFIX}large`, name: "Large" },
-  visualDesign: {
-    id: `${AGENT_PREFIX}visual-design`,
-    name: "Visual Design",
-  },
-};
 
 // `action` and `resource` accept full-value wildcards, the last matching rule wins, an agent's base
 // policy allows everything, and an action no rule matches falls back to "ask" rather than "deny".

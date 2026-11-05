@@ -12,7 +12,7 @@ import {
   advisorSafetyIssues,
   orphanAgentIDs,
 } from "./agents/safety.js";
-import { PreferenceStore } from "./state/store.js";
+import { PreferenceStateError, PreferenceStore } from "./state/store.js";
 import {
   type AdvisorSelection,
   type DelegationValidation,
@@ -83,10 +83,12 @@ export function createWiring(ports: HostPorts): Wiring {
           preferences,
           catalog: ports.catalog,
         });
-      } catch {
+      } catch (error) {
         // A preference document that cannot be read must not stop the plugin from loading; the
         // agents it already has stay as they are until the next pass. The reason is kept so the
-        // status can say so instead of looking like a plugin that does nothing.
+        // status can say so instead of looking like a plugin that does nothing. Anything else is a
+        // programming error, and swallowing it would hide the defect.
+        if (!(error instanceof PreferenceStateError)) throw error;
         state = "unreadable";
         return;
       }

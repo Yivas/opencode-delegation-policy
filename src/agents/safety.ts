@@ -1,8 +1,8 @@
 import {
   ADVISOR_DENIED_ACTIONS,
-  AGENT_PREFIX,
   type AgentPermission,
   isAdvisorAgentID,
+  reservedAgentIDs,
 } from "./ids.js";
 import type { AgentDefinition } from "./register.js";
 
@@ -54,10 +54,10 @@ export function advisorSafetyIssues(input: {
   return issues;
 }
 
-// Agents under the plugin's prefix that the current configuration no longer defines. They stay
+// Agents among the plugin's reserved ids that the current configuration no longer defines. They stay
 // launchable because the plugin only removes what it created in the same run, and after a reload it
-// cannot prove ownership. They are reported, never deleted: the prefix is the only evidence and a
-// deletion on a guess would take away an agent that might not be ours.
+// cannot prove ownership. They are reported, never deleted. Only the exact reserved ids are reported:
+// a user agent that happens to share the prefix is none of the plugin's business.
 export function orphanAgentIDs(input: {
   readonly definitions: readonly AgentDefinition[];
   readonly effective: readonly EffectiveAgent[];
@@ -65,7 +65,7 @@ export function orphanAgentIDs(input: {
   const defined = new Set(input.definitions.map((definition) => definition.id));
   return input.effective
     .map((agent) => agent.id)
-    .filter((id) => id.startsWith(AGENT_PREFIX) && !defined.has(id))
+    .filter((id) => reservedAgentIDs().includes(id) && !defined.has(id))
     .sort();
 }
 

@@ -318,8 +318,9 @@ test("an agent under the plugin's prefix that the configuration no longer define
         { id: "ocv2-advisor-1", permissions: [] },
         // Left over from an earlier run, or an advisor the configuration dropped.
         { id: "ocv2-advisor-2", permissions: [] },
-        // Not ours: the plugin claims only its exact ids.
+        // Not ours: the plugin claims only its exact ids, so the shared prefix alone is not evidence.
         { id: "my-own-agent", permissions: [] },
+        { id: "ocv2-mine", permissions: [] },
       ],
     }),
   });
@@ -353,6 +354,29 @@ test("an unreadable preference document leaves the plugin running and says why",
     advisors: [],
     orphans: [],
   });
+});
+
+// The unreadable-document path tolerates one failure and no more: validation reports its own
+// outcomes instead of throwing, so the only rejection it expects to absorb is the store's. The
+// narrowing is what keeps a future defect inside setup from being reported as an unreadable
+// document, which would look like a plugin with nothing to do.
+test("a storage failure is reported as an unreadable document, not as an idle plugin", async () => {
+  const wiring = createWiring({
+    storage: {
+      async get() {
+        throw new Error("host storage is unavailable");
+      },
+      async set() {},
+      async delete() {},
+    },
+    catalog: catalogDouble([model("acme", "small-model")]),
+    agentTransform: async () => ({ dispose: async () => {} }),
+    agentList: async () => ({ data: [] }),
+  });
+
+  await wiring.register();
+
+  assert.equal((await wiring.inspect()).registration, "unreadable");
 });
 
 test("a successful registration is reported as such", async () => {
