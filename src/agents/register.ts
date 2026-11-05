@@ -4,6 +4,7 @@ import type { RoleKey } from "../state/schema.js";
 import type { AdvisorSelection, RoleSelection } from "../validation/models.js";
 import {
   ADVISOR_DENIED_ACTIONS,
+  advisorAgentID,
   AGENT_PREFIX,
   type AgentPermission,
 } from "./ids.js";
@@ -78,7 +79,8 @@ export type RegisterAgentResult = {
 };
 
 // Permission rules and description do not teach behaviour: the system prompt carries the only
-// instruction the child sees, and phase 3.3 composes the full policy on top of it.
+// instruction the child sees. The delegation policy is injected where the main agent reads it, not
+// into these children.
 const ROLE_SYSTEM =
   "Work only on the delegated task within its stated scope. Report results and limitations; do not take on work outside it.";
 const ADVISOR_SYSTEM =
@@ -133,10 +135,8 @@ function selectionModel(selection: RoleSelection): AgentModel {
 }
 
 // Advisors are numbered in configuration order, so two entries with the same model still get their
-// own stable id instead of colliding.
-export function advisorAgentID(advisor: number): string {
-  return `${AGENT_PREFIX}advisor-${advisor}`;
-}
+// own stable id instead of colliding. The id shape lives in `ids.ts`, shared with the check that
+// recognises an advisor.
 
 // Every field the plugin owns is set explicitly, so re-registering is idempotent and an agent left
 // by an earlier configuration cannot keep an old model. Permissions are the exception: an ordinary
@@ -165,8 +165,9 @@ export function applyDefinition(
 // The ids above are a reserved namespace, so registration upserts them without inspecting what is
 // there: the editor has no owner field, and every inspectable field can be rewritten by the host
 // config that runs after this transform, which would make our own agents look foreign on the next
-// reload. A user agent that takes one of these exact ids is overwritten; the product documents that
-// reservation, and it is why no other `ocv2-` id is claimed.
+// reload. A user agent that takes one of these exact ids is overwritten: that reservation is a
+// decision of this product and is not in the user documentation yet, which is why no other `ocv2-`
+// id is claimed.
 // `created` holds the ids this process registered. Only those can be removed when a definition
 // disappears, because creation here is the one ownership fact the plugin actually observed; ids
 // seen only after a reload are never deleted on inference.

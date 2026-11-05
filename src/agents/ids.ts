@@ -6,6 +6,8 @@
 // ids; no other `ocv2-` id is claimed.
 export const AGENT_PREFIX = "ocv2-";
 
+const ADVISOR_PREFIX = `${AGENT_PREFIX}advisor-`;
+
 // Actions the host documents today. The wildcard rule covers anything else, and an action named by
 // the effective rules is checked too.
 export const ADVISOR_DENIED_ACTIONS = [
@@ -26,6 +28,10 @@ export type AgentPermission = {
   readonly effect: "allow" | "deny" | "ask";
 };
 
+export function advisorAgentID(advisor: number): string {
+  return `${ADVISOR_PREFIX}${advisor}`;
+}
+
 export function isAdvisorAgentID(id: string): boolean {
-  return id.startsWith(`${AGENT_PREFIX}advisor-`);
+  return id.startsWith(ADVISOR_PREFIX);
 }

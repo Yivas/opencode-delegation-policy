@@ -3,10 +3,10 @@ import { test } from "node:test";
 
 import {
   agentDefinitions,
-  advisorAgentID,
   applyDefinition,
   registerAgentDefinitions,
 } from "../dist/agents/register.js";
+import { advisorAgentID, isAdvisorAgentID } from "../dist/agents/ids.js";
 import {
   actionsNotDenied,
   advisorSafetyIssues,
@@ -190,6 +190,12 @@ test("each advisor is registered under its own number with every action denied",
     }
   }
   assert.equal(advisorAgentID(2), "ocv2-advisor-2");
+  // The same shape decides whether a definition is an advisor, so an id cannot be built one way and
+  // recognised another.
+  for (const definition of definitions) {
+    assert.equal(isAdvisorAgentID(definition.id), true);
+  }
+  assert.equal(isAdvisorAgentID("ocv2-small"), false);
 });
 
 test("registering writes every defined field on the reserved ids", () => {
