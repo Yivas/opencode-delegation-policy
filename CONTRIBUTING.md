@@ -1,7 +1,7 @@
 # Contributing
 
-This repository contains an early typed plugin entry and preference store, not a usable OpenCode
-plugin. Documentation corrections and scoped code changes are welcome through
+This repository contains an unreleased OpenCode plugin that has not yet run inside OpenCode.
+Documentation corrections and scoped code changes are welcome through
 [issues](https://github.com/Yivas/opencode-delegation-policy/issues) and pull requests.
 Discuss changes to the runtime contract before implementation.
 
@@ -18,11 +18,12 @@ npm ci --ignore-scripts
 npm run check
 ```
 
-Add tests at the state/store boundary with a storage double; do not mock this project's parser or
+Add tests at the boundary the change crosses, with doubles only for the host API (storage, model
+catalogue, agent editor, sessions, RPC, events); do not mock this project's own parser, validator or
 state logic. Do not commit `dist/`, `node_modules/`, temporary reports or personal configuration.
-Do not install the plugin in your personal OpenCode environment to run these tests. Host loading,
-provider calls and terminal integration are not covered by the local suite; report them separately
-if a scoped integration test is agreed. Do not add workflows or installation claims before they
+Do not load the plugin into an OpenCode setup you depend on to run these tests. Host loading,
+provider calls and terminal integration are not covered by the local suite; report what you observe
+in a throwaway OpenCode project separately, with the OpenCode version. Do not add workflows or installation claims before they
 have real checks behind them.
 
 Remove credentials, private endpoints, personal paths, conversations, prompts and session logs from

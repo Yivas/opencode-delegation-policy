@@ -1,227 +1,161 @@
 # opencode-delegation-policy
 
-Delegation policy for OpenCode v2, with explicit roles and model selection.
+Delegation policy for OpenCode v2, with explicit roles and model selection. It ports the behavior of
+the Pi extension `pi-delegation-policy` 0.25 to the public plugin API of OpenCode `2.0.21`.
 
-**Early implementation, not a usable plugin yet.** The typed entry, preference store,
-model/thinking validator, agent registration and a minimal `/delegate` command in the terminal
-interface have local unit tests. The plugin does not yet apply delegation policy to the conversation,
-and none of it has run against a real OpenCode host.
-There is no published package or verified OpenCode compatibility. Do not install this checkout in
-your personal OpenCode configuration.
+**Unreleased and not yet run inside OpenCode.** Every part has local tests against doubles of the
+host API, and none of it has been observed in a real OpenCode host. There is no published package
+and no supported version. Do not load it into an OpenCode setup you depend on.
+
+## What it does
+
+The plugin registers helper agents for the roles the defaults configure, `ocv2-small`, `ocv2-medium`,
+`ocv2-large` and `ocv2-visual-design`, and up to three Advisors, `ocv2-advisor-1` to
+`ocv2-advisor-3`, each on its exact model. Advisors carry a deny-everything permission list, so they
+give advice and run no tools.
+
+On each request of the main agent in a root session it adds a `<delegation_policy>` block to the
+system instructions. The block follows Pi's text: the intensity rule, Visual Design's four
+conditions, role choice by task fit, the Advisor checkpoints with a fixed brief order, ownership and
+the launch requirements, with the exact agent id and the model strings each role may be launched
+with. It names only agents the host actually lists, on the model they were created with. Delegated
+child sessions and the plugin's own agents never receive it.
+
+After an effective change of settings, the next turn also carries a short notice of what changed,
+so earlier settings quoted in the conversation stop steering the main agent. The notice is consumed
+when that turn succeeds.
+
+It also adds `ocv2-budget-*` thinking variants to six Anthropic models listed in its tables, so a
+budget can be chosen for them. It keeps user variants, never chooses one, and never changes the main
+agent's model.
+
+The plugin does not launch, route, supervise or accept subagent work. The main agent launches the
+agents through OpenCode's own `subagent` tool, under OpenCode's permissions. The text states
+obligations; it cannot enforce them.
+
+## Settings
+
+`/delegate` lives in the terminal interface and answers in a dialog. Typed alone, it opens a selector
+that builds the same commands.
+
+| Command | Effect |
+| --- | --- |
+| `/delegate` | Interactive command selector; cancelling sends nothing |
+| `/delegate status` | Settings of the open session, or the defaults on the home screen, with where each value comes from and whether it works |
+| `/delegate <off\|normal\|aggressive\|orchestrator>` | Intensity of the open session |
+| `/delegate advisor <off\|on\|with-delegation>` | Advisor mode of the open session |
+| `/delegate preference <efficient\|standard\|intensive>` | Small/Medium tie-break of the open session |
+| `/delegate reset` | Turns the open session's delegation and Advisor off |
+| `/delegate clear` | Drops the open session's changes, so it follows the defaults again |
+| `/delegate defaults intensity\|advisor-mode\|preference <value>` | Same settings, for every session |
+| `/delegate defaults role <small\|medium\|large\|visual-design> <provider/model[#variant]\|off\|unset>` | Model of a role |
+| `/delegate defaults thinking <role> <level\|from..to\|unset>` | Thinking policy of a role |
+| `/delegate defaults advisors <provider/model ...\|off\|unset>` | One to three Advisors, in order |
+| `/delegate log` | Newest entries of the local log |
+
+Agents are created when OpenCode starts, from the defaults, so a change to roles, Advisors or
+thinking needs a restart. A session can change intensity, Advisor mode and preference; it cannot
+create an agent. As in Pi, each of Small, Medium and Large must be configured or turned `off` before
+delegation works; Visual Design is optional.
+
+## Thinking
+
+OpenCode expresses thinking as model variants, written `provider/model#variant`. The plugin lists,
+for each role and Advisor, only the variants whose reasoning level it can name from its provider
+tables. A role without a thinking policy chooses one of them per launch, and a fixed or range policy
+lists only the variants it admits. A model whose variants cannot be named runs without one, and the
+policy says so. A `#variant` written into a reference is used only when its level can be named.
+
+The tables cover OpenAI and xAI Responses, Anthropic, DeepSeek, Z.ai, Moonshot, Google and specific
+Mistral models, from Pi AI `0.87.1`. Other providers, including OpenRouter, list no variants yet.
+Matching a catalogue entry is source evidence, not proof of what a provider does with the request.
+
+## Privacy and cost
+
+Each Advisor consultation sends a brief to another model, and there can be up to three Advisors per
+checkpoint, so one checkpoint can mean up to three extra model calls. The brief is the only context
+an Advisor gets: OpenCode 2.0.21 has no public way to launch a child with the parent conversation.
+
+The local log stays in the plugin's own OpenCode storage. It keeps times, the host version, a hash of
+the policy block when it changes, the modes in force and, for each launch of a plugin agent, its id,
+background flag, outcome and duration. It keeps no model argument, prompt, brief, answer, session id,
+path or host error. Reads accept only validated fields of the current log schema; older records are
+hidden and removed during pruning. Retention targets the newest 500 entries, with bounded scans and
+a queue of at most 64 pending writes. Overflow is dropped and reads stop waiting after one second:
+this is a best-effort diagnostic log, not an audit trail. The plugin makes no network calls of its
+own.
+
+## Try it locally
+
+OpenCode loads plugins from local directories listed under `plugins` in `opencode.json(c)`. In a
+throwaway project, `.opencode/opencode.jsonc`:
+
+```jsonc
+{
+  "plugins": ["/path/to/opencode-delegation-policy"]
+}
+```
+
+Build first with `npm ci --ignore-scripts` and `npm run build`. The emitted code imports nothing from
+the host at runtime. A throwaway project alone does not isolate OpenCode's global configuration,
+storage or service: use a separate disposable host environment, without personal sessions or
+credentials. Restart only that environment's service, configure the defaults with `/delegate
+defaults ...`, and restart again so the agents exist. `opencode debug agents` lists them.
+
+## Disable or remove
+
+To stop delegation and consultation for sessions that follow the defaults, use:
+
+```text
+/delegate defaults intensity off
+/delegate defaults advisor-mode off
+```
+
+Existing session overrides still take precedence. In each affected session, `/delegate reset` turns
+both axes off; `/delegate clear` drops its overrides and follows the defaults. Restart the disposable
+host so its agent catalogue is rebuilt. Turning the modes off does not delete preferences or log
+entries.
+
+To stop loading the plugin, remove only its entry from the project's `plugins` list and restart that
+environment's service. Do not delete unrelated plugin entries or host data. There is no command to
+wipe the plugin's storage, and removing its entry does not promise to erase it. Removal, persistent
+agent cleanup and rollback have not been exercised in a real host. There is no published release to
+roll back to; keep the last verified source commit and rebuild it if a local update fails, without
+resetting host storage to make the failure disappear.
+
+## Limits
+
+These are known gaps, not settled behavior:
+
+- Nothing here has run in OpenCode: loading the terminal entry, the dialog and its connection to
+  the server, the agent list format, injection order, launches with `#variant`, the Advisor's deny
+  list and the notice are all unverified.
+- The status line `D:/A:` in the prompt footer is not built: it needs OpenCode's terminal UI library at
+  runtime, which has not been checked.
+- Agents left over from an earlier configuration are reported, not removed.
+- The notice resets when OpenCode restarts, so a change made while it was stopped is not announced.
+- A tool that launches Advisors on the main agent's behalf (Pi's `consult_advisor`) is not built:
+  plugin-created sessions cannot be children of the conversation in this host version.
 
 ## Development
 
-The development baseline is Node.js `24.9.0`, npm `11.6.2` and the public types from
-`@opencode/plugin@2.0.21`. These types do not prove host compatibility.
+The baseline is Node.js `24.9.0`, npm `11.6.2` and the public types from `@opencode/plugin@2.0.21`
+and its terminal UI peers, installed as exact development dependencies.
 
 ```bash
 npm ci --ignore-scripts
 npm run check
 ```
 
-`check` runs formatting, lint, typechecking, build and Node's test runner. The tests use storage,
-catalogue and model-editor doubles, with no provider calls or changes to OpenCode configuration. Run `npm run build` before
-`npm test` when running the tests separately. Use `--ignore-scripts` for dependency installation;
-the pinned SDK includes optional transitive packages with install scripts.
-
-The store keeps versioned global defaults and session overrides, with per-field provenance and
-separate Advisor mode. Applying a session change never saves defaults. `clearSession` returns to
-global defaults; `resetSession` turns delegation and Advisor off for that session. Malformed or
-future documents are not overwritten. Mutations are serialized within one store instance, not across server
-processes; a rejected write requires a fresh read because the host may have stored it.
-
-The validator checks exact model references against an injected host catalogue and keeps delegation
-and Advisor errors separate. Advisors are an ordered list of one to three exact model references with
-no thinking policy; each entry is validated on its own, so the Advisor axis is active, partial (some
-entries usable) or an error. A `#variant` on an entry is the user's default and must be proven; the
-other proven variants are listed for the launch choice. An entry with none is launched without a
-variant and records why nothing was listed, so a model without variants is not confused with one
-whose variants are unproven. `with-delegation` without configured Advisors stays off; unreadable preferences fail both
-axes without applying policy. Catalogue availability is not authentication.
-
-Thinking validation recognizes the six named OpenAI/xAI Responses efforts and scoped Anthropic,
-DeepSeek, Z.ai, Moonshot, Google and exact-model Mistral controls. Native-field recognition and model-specific Pi translations
-carry separate evidence. A binary switch can cover several logical levels; the result keeps the
-full compatible set separate from the levels admitted by a fixed/range policy. Catalogue budget
-recipes also retain their grouped levels, but do not prove request-level admission.
-Variant names are not evidence. An explicit variant is never replaced, and the validator never
-chooses a variant or a per-run level. Recognizing a native effort field does not establish a
-particular model's advertised support. Readers now classify native-field facts separately from
-model-specific Pi recipes. The selector does not admit a logical thinking requirement from a
-native-field fact alone, including an off switch on an unlisted model. Those facts remain available
-for inspection; the classification is not backend, ownership or final-request verification.
-
-The selector now checks 29 direct OpenAI and four direct xAI Responses rows from Pi AI `0.87.1`.
-It uses declared provider/package/model identity and compares the mapped effort, summary and encrypted
-include together; unresolved aliases or conflicting identities are not treated as permanently
-unsupported. Native recognition of `max` does not admit it for GPT-5. Provider defaults and recursive
-body overlays remain part of the comparison: `undefined` does not delete inherited fields. Ten
-advertised GPT-5 off recipes cannot satisfy the required summary omission through the checked valid
-metadata path. The matcher keeps those controls unproven, rather than selecting a fallback or altering
-the request. This is conditional source-snapshot evidence, not authentication, final-wire controls or
-provider acceptance. Five exact Meta Responses rows also use this selector through the verified
-`@opencode/ai/providers/meta/responses` route. They require explicit automatic summary; native
-Meta effort-only variants do not satisfy the Pi recipe. None advertises off, and only
-`muse-spark-1.3` advertises max.
-
-Another 34 exact Console/Go rows use declared `opencode`/`opencode-go` identities and known Responses
-package routes. The OpenAI facade and its Responses alias share their GPT-5 defaults; the generic
-`openai-compatible-responses` route has no automatic summary, but does inherit encrypted inclusion.
-The compatible base package is Chat and is not admitted as Responses. A missing declared generic
-`baseURL` is an unproven construction prerequisite, not proof of a bad model or a trusted endpoint.
-OpenCode off recipes omit both summary and inclusion regardless of the selected factory.
-Canonical conflicts and unknown routes remain unresolved; no request, identity or endpoint is changed.
-Cloudflare AI Gateway adds 17 exact source rows through its native Responses route. The declared
-model ID must use `openai/`; only the verified native branch strips that prefix for the Pi lookup.
-A custom REST `baseURL` remains unresolved, and a missing declared `accountId` is an unproven
-construction prerequisite, not an authentication result. Cloudflare requires explicit automatic
-summary and does not advertise off in this snapshot. No model reference or request is rewritten.
-GitHub Copilot adds its 17 exact source rows through the declared `aisdk:@ai-sdk/github-copilot`
-package and its separate Responses bridge. The route uses the `responses`/`chat` setting before
-its documented model-ID fallback. Positive recipes need explicit effort and automatic summary;
-the lowerer adds encrypted reasoning. Its effective settings schema accepts three include values,
-not all seven from the API type. Pi's two advertised Copilot off recipes remain unproven because
-they require omission, not the include that this lowerer forces.
-
-All 106 Responses catalogue rows now have source-level admission rules. That does not complete
-thinking adaptation: unresolved metadata, omission gaps, other APIs and runtime gates remain.
-
-Plugin setup now connects the existing owned-variant provisioner to the public `model.transform`
-and `model.list` methods. It waits for registration and a valid callback result, using the read
-barrier if the callback is deferred, before returning cleanup for its own registration. This publishes budget metadata for six source-listed manual Anthropic models;
-it neither chooses a variant nor changes the principal model. Importing the entry has no host effects
-and does not load the SDK at runtime. Those variants are catalogue recipes, not thinking-level proofs: the native reader
-can reduce their budget using the request's `max_tokens`, which role validation does not know.
-Positive budget variants therefore remain unproven; disabled thinking still proves the scoped off
-level without reading an output limit. It preserves user variants, rejects any reserved-prefix collision and waits for
-an effective catalogue read when registration is batched. Unexpected editor failures escape to the
-host's failure boundary; in a grouped host this can disable the plugin's transform group. Expected
-per-model rejections remain skips.
-
-Google planning uses exact model/API tables, including the different Gemini 2.5 Flash-Lite budgets
-in GenAI and Vertex. Scoped uppercase levels reproduce Pi's SDK enum values; lowercase levels carry
-native-field evidence only. The pure request verifier distinguishes unknown, known and proven-absent
-output caps, checks the native budget fit and filters ranges without selecting a level. All Google
-budgets, including automatic `-1`, remain conditional candidates outside role validation. Native
-lowering of budget `off` also adds `includeThoughts`, which Pi omits. These helpers are not wired to a launch gate.
-
-An inert request component can replace only the Google thinking subtree after native lowering,
-restoring the scoped Pi budget or omitting inherited fields for `off` without changing the output cap.
-It requires an injected authority for the exact child, parent, role, model, variant, registration
-lifetime and body-independent authentication. It preserves request options and rejects stale bindings
-or concurrent request changes. There is no production ownership authority or hook registration yet.
-Its factory requires a `maxBytes`/`timeoutMs` read policy and a separate third `waitPolicy` argument
-with `timeoutMs`; neither has production defaults. The cooperative wait deadline starts at hook
-entry and covers both ownership classifications and body reading together. Timeout or abort retires
-that invocation, stops its cloned reader and prevents the module's own late rewrite. Callback errors
-remain opaque, including lookalikes of internal timeout errors.
-
-The cloned body is collected incrementally, counted using intrinsic byte lengths and cancelled on
-read failure without consuming or aborting the original. The deadline cannot preempt synchronous
-CPU work or cancel an external classifier or its own effects. Clone tee, source chunks, parsed JSON
-and rebuilt bodies can still increase memory use, and later hooks can rewrite the result. HTTP
-callbacks can access authentication headers; this is not a credential-isolated boundary. Restoring
-Pi's budget while keeping the total output cap can leave less answer room. Local fixtures verify
-these callback-position controls, not strict whole-function timing, final-wire controls or provider
-acceptance.
-
-Bedrock has a separate pure planner for all 47 exact adaptive Claude catalogue entries in Pi AI
-`0.87.1`. It resolves `xhigh` and `off` support per row, keeps compatible and admitted levels separate,
-and checks an overlay against caller-supplied fields asserted to represent the lowered native body.
-Seven rows reject logical `off`; nine carry a native-default binding obstacle that the overlay
-cannot delete. A control match proves only the supplied-field comparison at the pre-auth overlay
-stage. Retained display, caller and binding conditions are not discharged: no actual observation,
-host override or default reachability is certified. The planner does not execute requests, certify
-AWS regions or restore Bedrock capability proofs in role validation. Newer SDK semantics remain
-outside this scope.
-
-A second pure planner covers the 22 exact nonadaptive Claude entries in the same snapshot. It
-calculates manual budgets from supplied context estimates and Pi caller caps, with every arithmetic
-stage visible. It compares Pi's virtual output cap with a separately supplied native cap; either a
-higher or lower Pi cap blocks cap-preserving parity without changing the native value. Fixed/range
-results keep complete recipe-equivalent sets and select nothing. The reference rows and level list
-are immutable. These are source calculations and target descriptions, not verified provider requests:
-context/cap producers, client resolution, authentication, serialization and a request consumer remain
-unfinished. Synthetic arithmetic inputs carry no catalogue evidence.
-
-An unwired Bedrock reader observes `inferenceConfig.maxTokens` from a native clone of a supplied
-`Request`, leaving the original readable. It distinguishes a finite numeric cap, known absence,
-malformed fields and unavailable evidence without exposing the body or headers. Its scope is that
-request snapshot, not the cap finally sent. The caller must establish the protocol and ownership;
-public events expose no request ID for authoritative cross-stage correlation. It buffers the whole
-JSON body and has no timeout or cancellation policy, so an open stream can leave it pending.
-These resource limits must be addressed before integration; no callback is registered.
-
-A source-only planner covers the other 54 exact Bedrock reasoning entries in the same snapshot.
-Pi's builder emits no thinking control for those entries; this is not a claim that thinking is disabled
-or that a real request has no control. The planner preserves each row's five or six advertised levels,
-keeps admitted and compatible sets separate, and calculates Simple/raw caps without choosing a level.
-All seven canonical inputs share the builder result, but unadvertised `max` and scoped `xhigh` remain
-outside policy admission. Pi payload hooks, native thinking settings, compatibility overrides,
-arbitrary control/cap body overlays and later peers remain unresolved conditions. No native comparator
-or role capability proof is added.
-
-A source-only Mistral Simple planner covers nine exact provider/API/model entries from Pi AI
-`0.87.1`. Its six effort entries map every advertised positive level to `reasoningEffort: "high"`;
-three others use `promptMode: "reasoning"`. Off omits both fields, without claiming physical
-disablement. Fixed/range results keep the full positive compatible set and admitted intersections;
-a range spanning off and positives returns both candidates without selecting one. The planner
-calculates virtual Simple caps from explicit caller-cap and estimate states, never filling unknowns
-with zero or clipping a supplied caller cap to the catalogue maximum. SDK clamping of `xhigh`/`max`
-to `high` is source evidence, not policy admission. The planner does not turn its omission
-descriptors into request settings or clearing overlays, and has no raw canonical request planner.
-
-The selector separately matches those nine exact source identities through
-`@opencode/ai/providers/mistral`. Despite its adapter name, Pi's `mistral-conversations` code sends
-to the same Chat Completions endpoint as the native reader. The matcher compares both effective
-controls across model/variant settings and body overlays, preserves unrelated metadata and caller
-caps, and rejects unknown IDs, contradictory controls and unproven aliases. It keeps inline variants
-and complete compatible/admitted sets without choosing a level. Off proves equivalent omission,
-not that the backend stops reasoning. This is a model-specific source recipe, not admission for any
-Mistral model that accepts a string setting. Pi's Mistral adapter requires a truthy API key; that known
-source prerequisite does not establish usable native credentials. Runtime authentication, payload
-hooks, later request options/writers and provider acceptance remain unverified. No Mistral request
-callback, agent or launch is registered by this change.
-
-A source-only Codex Simple planner covers eight exact `openai-codex-responses` entries from that
-snapshot. Positive recipes include effort and automatic summary; supported off recipes use effort
-`none` with no summary. All retain encrypted-reasoning inclusion. Minimal and low share a complete
-compatible set; inclusive ranges return every admitted control class without selecting one.
-Advertised support rejects off for Astra and max for Spark/GPT-5.5 even where SDK clamping or raw
-inputs behave differently. Pi calculates a Simple output cap but never puts it in the Codex body;
-the planner records that builder-scoped omission before payload hooks, not a sent cap or an
-instruction to remove a native caller cap. It takes no cap or estimate input and has no arithmetic
-helper. Credential/account prerequisites, Simple preprocessing, body replacement, native
-correspondence, overlays, later writers and backend acceptance remain unresolved. No native
-family, raw planner, request consumer or role proof is registered.
-
-A source-only Azure Simple planner covers all 29 exact reasoning entries in that snapshot.
-Admitted positive levels keep their individual effort, automatic summary and encrypted-reasoning
-include; the nine admitted off entries use effort `none` without summary or include. Inclusive ranges
-return all supported classes without selection. The Simple cap and the builder target are separate:
-the builder raises a positive cap below 16 to 16 before sampling-parameter overlays and payload
-hooks. Supplied caps are not clipped to the catalogue maximum, and unknown caps/estimates stay
-unresolved. Positive finite supplied caps are a local input precondition; source zero-cap omission
-is not modelled. Azure client/deployment resolution, overlays, native correspondence and backend
-acceptance remain unresolved; no family registration, request consumer or role proof is added.
-
-Full thinking parity remains unfinished, including other model/wrapper branches, Gemini budget
-execution and scoped `off` controls. Pi-messages forwarding
-also leaves server-side translation unresolved. Anthropic catalogue budget calculations remain
-available separately; role validation does not treat them as proof at an unknown request cap. Unit tests do not prove
-the effective provider payload, launch choice or provider behavior.
-
-The setup seam is tested with synthetic model-domain doubles, not a running SDK or host.
-Real plugin loading, policy injection, native agents/launches, terminal UI, packaging and host
-integration remain unfinished. The manifest is private and has no release version.
+`check` runs formatting, lint, typechecking, build and Node's test runner. The tests use doubles of
+storage, the model catalogue, the agent editor, sessions, RPC and the event stream; they make no
+provider calls and change no OpenCode configuration. Use `--ignore-scripts`: the pinned SDK pulls
+optional transitive packages with install scripts.
 
 ## Participate
 
-This is a collaborative open-source project under the [MIT License](LICENSE).
-[Issues](https://github.com/Yivas/opencode-delegation-policy/issues) and pull requests are welcome for documentation corrections and scoped
-proposals. Discuss changes to the runtime contract first; local unit tests do not establish a
-supported OpenCode version.
-See [Contributing](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
-
-Report sensitive findings through the process in [Security](SECURITY.md), not in a public issue.
-There is no supported plugin release or plugin installation procedure at this stage.
+This is an open-source project under the [MIT License](LICENSE).
+[Issues](https://github.com/Yivas/opencode-delegation-policy/issues) and pull requests are welcome for
+documentation corrections and scoped proposals; discuss changes to the runtime contract first. See
+[Contributing](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md). Report sensitive
+findings through [Security](SECURITY.md), not in a public issue.
