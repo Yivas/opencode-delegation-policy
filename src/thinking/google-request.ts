@@ -703,7 +703,11 @@ async function readBoundedText(
           throw readerError("body-too-large");
         }
         received += chunkBytes;
-        const piece = decoder.decode(step.value, { stream: true });
+        // Decode a copy built from the intrinsic length: with `{ stream: true }`, Node's TextDecoder
+        // reads the chunk's own `byteLength`, so a shadowed zero silently truncates the body.
+        const piece = decoder.decode(new Uint8Array(step.value), {
+          stream: true,
+        });
         if (piece !== "") {
           pieces.push(piece);
         }

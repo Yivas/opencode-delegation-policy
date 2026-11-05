@@ -119,6 +119,16 @@ function advisorSelection(advisor, id, unlisted = "thinking-unsupported") {
   return { advisor, model: { providerID: "acme", id }, variants: [], unlisted };
 }
 
+// The usable axis shapes. `warnings` reports an entry that runs with less than it has, and is empty
+// unless a test proves otherwise; `issues` only appears while some entry is unusable.
+function activeAxis(advisors, warnings = []) {
+  return { status: "active", advisors, warnings };
+}
+
+function partialAxis(advisors, issues, warnings = []) {
+  return { status: "partial", advisors, issues, warnings };
+}
+
 const UNREADABLE_ISSUES = [
   { field: "preferences", code: "preferences-unreadable" },
 ];
@@ -324,10 +334,10 @@ test("with delegation off, an invalid stored ordinary role is ignored while a va
   });
 
   assert.deepEqual(result.delegation, { status: "off" });
-  assert.deepEqual(result.advisor, {
-    status: "active",
-    advisors: [advisorSelection(1, "advisor-model")],
-  });
+  assert.deepEqual(
+    result.advisor,
+    activeAxis([advisorSelection(1, "advisor-model")]),
+  );
   assert.equal(catalog.calls, 1);
 });
 
@@ -1037,10 +1047,10 @@ test("with-delegation, active intensity, invalid delegation and a valid Advisor 
   });
 
   assert.equal(result.delegation.status, "error");
-  assert.deepEqual(result.advisor, {
-    status: "active",
-    advisors: [advisorSelection(1, "advisor-model")],
-  });
+  assert.deepEqual(
+    result.advisor,
+    activeAxis([advisorSelection(1, "advisor-model")]),
+  );
 });
 
 test("each valid Advisor is kept in order with its number and an invalid one makes the axis partial", async () => {
@@ -1064,14 +1074,16 @@ test("each valid Advisor is kept in order with its number and an invalid one mak
   });
 
   assert.equal(result.delegation.status, "active");
-  assert.deepEqual(result.advisor, {
-    status: "partial",
-    advisors: [
-      advisorSelection(1, "medium-model"),
-      advisorSelection(3, "medium-model"),
-    ],
-    issues: [{ advisor: 2, field: "model", code: "model-not-found" }],
-  });
+  assert.deepEqual(
+    result.advisor,
+    partialAxis(
+      [
+        advisorSelection(1, "medium-model"),
+        advisorSelection(3, "medium-model"),
+      ],
+      [{ advisor: 2, field: "model", code: "model-not-found" }],
+    ),
+  );
 });
 
 test("an Advisor lists its proven variants and keeps a proven default variant", async () => {
@@ -1118,7 +1130,28 @@ test("an Advisor lists its proven variants and keeps a proven default variant", 
   assert.equal(listed.unlisted, undefined);
 });
 
-test("an Advisor without proven variants stays valid with nothing to list, but an unproven default fails it", async () => {
+test("an Advisor whose model has no variants stays valid and is not a loss, so it carries no warning", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "off",
+    advisorMode: "on",
+    advisors: advisors("acme/advisor-model"),
+  });
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog: catalogDouble(standardCatalog()),
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(
+    result.advisor,
+    activeAxis([advisorSelection(1, "advisor-model")]),
+  );
+});
+
+test("unproven variants and an unproven default keep the Advisor usable and are reported as warnings", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
@@ -1145,24 +1178,36 @@ test("an Advisor without proven variants stays valid with nothing to list, but a
     sessionID: SESSION_ID,
   });
 
-  assert.deepEqual(result.advisor, {
-    status: "partial",
-    advisors: [
-      advisorSelection(1, "advisor-model"),
-      advisorSelection(2, "budget-model", "thinking-unmapped"),
-    ],
-    issues: [
-      { advisor: 3, field: "thinking", code: "thinking-variant-unproven" },
-    ],
-  });
+  assert.deepEqual(
+    result.advisor,
+    activeAxis(
+      [
+        advisorSelection(1, "advisor-model"),
+        advisorSelection(2, "budget-model", "thinking-unmapped"),
+        {
+          advisor: 3,
+          model: { providerID: "acme", id: "budget-model", variant: "budget" },
+          variants: [],
+          unlisted: "thinking-unmapped",
+          defaultUnproven: true,
+        },
+      ],
+      [
+        { advisor: 2, field: "thinking", code: "thinking-unmapped" },
+        { advisor: 3, field: "thinking", code: "thinking-variant-unproven" },
+      ],
+    ),
+  );
 });
 
-test("a catalogue identity that contradicts the recipe fails the Advisor instead of hiding its variants", async () => {
+test("an Advisor whose identity the tables cannot resolve stays usable, like the same model as an ordinary role", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
+  // The same model, once as Small with no thinking policy and once as Advisor.
   await store.saveDefaults({
-    intensity: "off",
+    intensity: "normal",
     advisorMode: "on",
+    roles: { small: configured("openai/advisor-model") },
     advisors: advisors("openai/advisor-model"),
   });
   const catalog = catalogDouble([
@@ -1178,12 +1223,28 @@ test("a catalogue identity that contradicts the recipe fails the Advisor instead
     sessionID: SESSION_ID,
   });
 
-  assert.deepEqual(result.advisor, {
-    status: "error",
-    issues: [
-      { advisor: 1, field: "thinking", code: "thinking-identity-unresolved" },
-    ],
-  });
+  // A role with an unset policy never checks identity; the Advisor must not be stricter than it.
+  assert.equal(result.delegation.status, "active");
+  assert.deepEqual(
+    result.advisor,
+    activeAxis(
+      [
+        {
+          advisor: 1,
+          model: { providerID: "openai", id: "advisor-model" },
+          variants: [],
+          unlisted: "thinking-identity-unresolved",
+        },
+      ],
+      [
+        {
+          advisor: 1,
+          field: "thinking",
+          code: "thinking-identity-unresolved",
+        },
+      ],
+    ),
+  );
 });
 
 test("an inactive Advisor axis does not validate its entries", async () => {
@@ -1303,10 +1364,10 @@ test("the validation output carries only identifiers, variants, levels and issue
       { field: "roles", code: "no-ordinary-role" },
     ],
   });
-  assert.deepEqual(result.advisor, {
-    status: "active",
-    advisors: [advisorSelection(1, "advisor-model")],
-  });
+  assert.deepEqual(
+    result.advisor,
+    activeAxis([advisorSelection(1, "advisor-model")]),
+  );
   assert.ok(!JSON.stringify(result).includes(SECRET));
   assert.ok(!JSON.stringify(result).includes("headers"));
   assert.ok(!JSON.stringify(result).includes("body"));
@@ -2102,12 +2163,32 @@ test("native Alibaba off syntax does not prove model-specific eligibility for an
   });
 
   assert.equal(result.delegation.status, "active");
-  assert.deepEqual(result.advisor, {
-    status: "error",
-    issues: [
-      { advisor: 1, field: "thinking", code: "thinking-variant-unproven" },
-    ],
-  });
+  // The default exists in the catalogue and is used as written; the tables just cannot name its level.
+  assert.deepEqual(
+    result.advisor,
+    activeAxis(
+      [
+        {
+          advisor: 1,
+          model: {
+            providerID: "alibaba",
+            id: "synthetic-model",
+            variant: "no-thinking",
+          },
+          variants: [],
+          unlisted: "thinking-unmapped",
+          defaultUnproven: true,
+        },
+      ],
+      [
+        {
+          advisor: 1,
+          field: "thinking",
+          code: "thinking-variant-unproven",
+        },
+      ],
+    ),
+  );
 });
 
 test("a catalogue entry whose modelID is not text fails the active axes as catalogue unavailable", async () => {

@@ -69,12 +69,14 @@ export type ValidationIssue = {
 // proven variant the main agent may pass instead. When none can be listed, `variants` is empty,
 // `unlisted` says why ("thinking-unsupported" when the model has no proven-capable variant at all,
 // "thinking-unmapped" when some exist but none is proven, and so on), and the Advisor is launched
-// without a variant, like an ordinary role with no thinking policy.
+// without a variant, like an ordinary role with no thinking policy. `defaultUnproven` marks a
+// default that exists in the catalogue but whose level the tables cannot name yet: it is still used.
 export type AdvisorSelection = {
   readonly advisor: number;
   readonly model: ModelReference;
   readonly variants: readonly ThinkingOption[];
   readonly unlisted?: ThinkingIssueCode;
+  readonly defaultUnproven?: true;
 };
 
 export type DelegationAxis =
@@ -87,17 +89,21 @@ export type DelegationAxis =
   | { readonly status: "error"; readonly issues: readonly ValidationIssue[] };
 
 // "partial" keeps the valid Advisors usable and reports the rest; "active" never carries issues and
-// "error" means no configured Advisor is usable.
+// "error" means no configured Advisor is usable. `warnings` on either usable state reports an entry
+// that works with less than it asked for (no variant could be listed, or its default is unproven),
+// so every status renderer has to surface it instead of re-deriving it from the entries.
 export type AdvisorAxis =
   | { readonly status: "off" }
   | {
       readonly status: "active";
       readonly advisors: readonly AdvisorSelection[];
+      readonly warnings: readonly ValidationIssue[];
     }
   | {
       readonly status: "partial";
       readonly advisors: readonly AdvisorSelection[];
       readonly issues: readonly ValidationIssue[];
+      readonly warnings: readonly ValidationIssue[];
     }
   | { readonly status: "error"; readonly issues: readonly ValidationIssue[] };
 
@@ -143,16 +149,6 @@ const ORDINARY_ROLES: readonly RoleKey[] = ["small", "medium", "large"];
 
 // Listing an Advisor's variants asks which ones have any proven level at all.
 const ANY_THINKING_LEVEL: ThinkingRequirement = { from: "off", to: "max" };
-
-// The only failures that mean "no variant can be listed" for a model that is otherwise valid.
-// Anything else, including a catalogue identity that contradicts the recipe and any code added
-// later, invalidates the Advisor entry instead.
-const NO_LISTABLE_VARIANT_CODES: readonly ThinkingIssueCode[] = [
-  "thinking-unmapped",
-  "thinking-unsupported",
-  "thinking-construction-unproven",
-  "thinking-pi-level-unsupported",
-];
 
 // Snapshot codes mean the stored document cannot be trusted. Other PreferenceStateError codes
 // are caller errors, such as an invalid session identifier, and must not look like corruption.
@@ -270,10 +266,39 @@ async function validateAdvisor(
   if (advisors.length === 0) {
     return { status: "error", issues };
   }
+  const warnings = advisorWarnings(advisors);
   if (issues.length > 0) {
-    return { status: "partial", advisors, issues };
+    return { status: "partial", advisors, issues, warnings };
   }
-  return { status: "active", advisors };
+  return { status: "active", advisors, warnings };
+}
+
+// An entry that runs with less than it has is still usable, but the status must say so. A model
+// with no variants at all is not a loss: the user chose that model, not its reasoning levels. A
+// model that has variants the tables cannot name, or a default whose level is unproven, is.
+function advisorWarnings(
+  advisors: readonly AdvisorSelection[],
+): readonly ValidationIssue[] {
+  const notes: ValidationIssue[] = [];
+  for (const entry of advisors) {
+    if (entry.defaultUnproven !== undefined) {
+      notes.push({
+        advisor: entry.advisor,
+        field: "thinking",
+        code: "thinking-variant-unproven",
+      });
+    } else if (
+      entry.unlisted !== undefined &&
+      entry.unlisted !== "thinking-unsupported"
+    ) {
+      notes.push({
+        advisor: entry.advisor,
+        field: "thinking",
+        code: entry.unlisted,
+      });
+    }
+  }
+  return notes;
 }
 
 async function resolveConfiguredRole(
@@ -323,39 +348,43 @@ async function resolveAdvisor(
     return resolved;
   }
   const { model, inlineVariant } = resolved.value;
+  const base = { advisor, model: resolved.value.reference };
 
-  // A default written by the user must be proven; it is never dropped to make the entry valid.
+  // A default written by the user is never dropped. If the tables cannot name its level the entry
+  // still runs with that variant and says so; only a variant the catalogue does not have fails,
+  // and resolveModel already rejected that case.
+  let defaultUnproven: true | undefined;
   if (inlineVariant !== undefined) {
-    const selected = selectThinkingVariant(
+    const proven = selectThinkingVariant(
       model,
       ANY_THINKING_LEVEL,
       inlineVariant,
     );
-    if (!selected.ok) {
-      return failed(subject, "thinking", selected.code);
+    if (!proven.ok) {
+      defaultUnproven = true;
     }
   }
 
   // The listing is a separate call: with an inline variant the selector returns only that one.
+  // A model that is usable must not become unusable because its reasoning cannot be named: any
+  // failure here only means nothing can be listed, exactly like an ordinary role without a policy.
   const listed = selectThinkingVariant(model, ANY_THINKING_LEVEL, undefined);
-  const base = { advisor, model: resolved.value.reference };
-  if (listed.ok) {
-    // A requirement without an inline variant yields options; anything else is not a listing.
-    if (listed.selection.kind !== "options") {
-      return failed(subject, "thinking", "thinking-unsupported");
-    }
+  const extra = defaultUnproven === undefined ? {} : { defaultUnproven };
+  if (listed.ok && listed.selection.kind === "options") {
     return {
       ok: true,
-      value: { ...base, variants: listed.selection.options },
+      value: { ...base, variants: listed.selection.options, ...extra },
     };
   }
-  if (NO_LISTABLE_VARIANT_CODES.includes(listed.code)) {
-    return {
-      ok: true,
-      value: { ...base, variants: [], unlisted: listed.code },
-    };
-  }
-  return failed(subject, "thinking", listed.code);
+  return {
+    ok: true,
+    value: {
+      ...base,
+      variants: [],
+      unlisted: listed.ok ? "thinking-unsupported" : listed.code,
+      ...extra,
+    },
+  };
 }
 
 // Reference grammar, catalogue lookup and inline variant shared by roles and Advisors.
