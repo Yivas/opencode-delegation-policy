@@ -326,7 +326,11 @@ function describeInjection(
   if (injection === undefined) return "Policy check: not available.";
   const report = injection();
   const key = "reason" in report ? report.reason : report.outcome;
-  return `Policy check: ${INJECTION_TEXT[key]}`;
+  const kind =
+    "kind" in report && report.kind !== undefined ? ` (${report.kind})` : "";
+  // The plugin sees requests from every session, so this is the latest one it handled, whichever
+  // session it belonged to, and describes what the plugin did to it, not what the provider received.
+  return `Policy check (latest request handled, any session): ${INJECTION_TEXT[key]}${kind}`;
 }
 
 function describeIssues(issues: readonly ValidationIssue[]): string {

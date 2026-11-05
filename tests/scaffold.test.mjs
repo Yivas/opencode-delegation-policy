@@ -365,3 +365,38 @@ test("setup hooks the main agent's requests only, and retires the hook", async (
   await cleanup();
   assert.equal(state.hooks.length, 0);
 });
+
+test("defaults saved through /delegate reach the next request of the main agent", async () => {
+  const { context, state } = setupContext([eligible({ enabled: true })]);
+  await delegationPolicy.setup(context);
+  const [{ handlers }] = state.rpcs;
+  const [{ callback }] = state.hooks;
+  const request = () => ({
+    sessionID: "root",
+    agent: "build",
+    system: [{ type: "text", text: "host instructions" }],
+  });
+
+  // Defaults are off: the request is left as it came.
+  const before = request();
+  await callback(before);
+  assert.equal(before.system.length, 1);
+
+  for (const line of [
+    "intensity normal",
+    "role small anthropic/claude-sonnet-4-5",
+    "role medium off",
+    "role large off",
+  ]) {
+    await handlers.run({ line });
+  }
+  const after = request();
+  await callback(after);
+
+  assert.equal(after.system[0].text, "host instructions");
+  assert.match(after.system[1].text, /agent "ocv2-small"/);
+  assert.match(
+    (await handlers.run({ line: "" })).text,
+    /latest request carried the delegation policy/,
+  );
+});

@@ -168,6 +168,72 @@ test("a session's parent is looked up once, since it never changes", async () =>
   assert.deepEqual(lookups.lookups, ["root"]);
 });
 
+test("a foreign instruction that quotes the marker is someone else's text and stays", () => {
+  const quoting = {
+    type: "text",
+    text: "Docs: the plugin marks its block with <!-- opencode-delegation-policy:owned --> inside.",
+  };
+  const system = [quoting];
+
+  replacePolicyBlock(system, undefined);
+
+  assert.deepEqual(system, [quoting]);
+});
+
+test("an Advisor alone still reaches the main agent's request", async () => {
+  const storage = storageDouble();
+  const store = new PreferenceStore(storage);
+  await store.saveDefaults({
+    advisorMode: "on",
+    advisors: { kind: "configured", models: ["acme/small-model"] },
+  });
+  const injector = createPolicyInjector({ store, catalog, ...sessions() });
+  const system = [];
+
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  assert.match(system[0].text, /Only consultation guidance is active/);
+});
+
+test("each session gets its own policy, even when requests overlap", async () => {
+  const { store } = await activeStore();
+  await store.applySession("busy", { intensity: "orchestrator" });
+  const injector = createPolicyInjector({ store, catalog, ...sessions() });
+  const normal = [];
+  const busy = [];
+
+  await Promise.all([
+    injector.apply({ sessionID: "busy", agent: "build", system: busy }),
+    injector.apply({ sessionID: "calm", agent: "build", system: normal }),
+  ]);
+
+  assert.match(busy[0].text, /Intensity: orchestrator\./);
+  assert.match(normal[0].text, /Intensity: normal\./);
+});
+
+test("an unexpected error leaves no block and names only its kind", async () => {
+  const injector = createPolicyInjector({
+    store: {
+      async readSession() {
+        throw new RangeError("secret host detail");
+      },
+    },
+    catalog,
+    ...sessions(),
+  });
+  const system = [];
+  replacePolicyBlock(system, "<delegation_policy>\nold\n</delegation_policy>");
+
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  assert.deepEqual(system, []);
+  assert.deepEqual(injector.last(), {
+    outcome: "failed",
+    reason: "unexpected-error",
+    kind: "RangeError",
+  });
+});
+
 test("a block left by an earlier version is recognised by its marker and replaced", () => {
   const system = [
     { ...OTHER },

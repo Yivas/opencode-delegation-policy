@@ -23,6 +23,12 @@ type SystemPart = {
   readonly metadata?: Readonly<Record<string, unknown>>;
 };
 
+const BLOCK_OPENING = `<delegation_policy>\n${OWNED_MARKER}\n`;
+const BLOCK_CLOSING = "</delegation_policy>";
+
+// Ownership is the metadata this plugin writes. A part without it (a host that drops part metadata)
+// counts only when it is a whole block of ours, from the opening tag and marker to the closing tag:
+// a foreign instruction that merely quotes the marker is someone else's text and stays.
 function isOwned(part: {
   readonly text?: unknown;
   readonly metadata?: unknown;
@@ -35,7 +41,11 @@ function isOwned(part: {
   ) {
     return true;
   }
-  return typeof part.text === "string" && part.text.includes(OWNED_MARKER);
+  return (
+    typeof part.text === "string" &&
+    part.text.startsWith(BLOCK_OPENING) &&
+    part.text.endsWith(BLOCK_CLOSING)
+  );
 }
 
 // Removes every block this plugin added before and appends the current one, if any. Running it twice
@@ -73,6 +83,9 @@ export type InjectionReport =
         | "session-lookup"
         | "preferences-unreadable"
         | "unexpected-error";
+      // The kind of error only (its class name), never its message: enough to tell one defect from
+      // another without carrying host or user text into the status.
+      readonly kind?: string;
     };
 
 export type InjectorPorts = {
@@ -93,8 +106,13 @@ export type PolicyInjector = {
   last(): InjectionReport;
 };
 
+// Sessions whose parent is remembered. Past it the oldest is forgotten and simply looked up again,
+// so memory follows recent sessions rather than every session the host ever ran.
+const MAX_REMEMBERED_SESSIONS = 512;
+
 export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
-  // A session's parent is fixed when it is created, so the lookup is kept for the plugin's lifetime.
+  // A session's parent is assumed fixed once it exists (not verified against the host), so a lookup
+  // is reused until it is evicted.
   const roots = new Map<string, boolean>();
   let report: InjectionReport = { outcome: "none-yet" };
 
@@ -104,6 +122,10 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
     const info = await ports.session(sessionID);
     const root = info.parentID === undefined || info.parentID === "";
     roots.set(sessionID, root);
+    if (roots.size > MAX_REMEMBERED_SESSIONS) {
+      const oldest = roots.keys().next().value;
+      if (oldest !== undefined) roots.delete(oldest);
+    }
     return root;
   }
 
@@ -142,13 +164,14 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
         });
         block = renderDelegationPolicy({ preferences, validation });
       } catch (error) {
-        report = {
-          outcome: "failed",
-          reason:
-            error instanceof PreferenceStateError
-              ? "preferences-unreadable"
-              : "unexpected-error",
-        };
+        report =
+          error instanceof PreferenceStateError
+            ? { outcome: "failed", reason: "preferences-unreadable" }
+            : {
+                outcome: "failed",
+                reason: "unexpected-error",
+                kind: error instanceof Error ? error.name : typeof error,
+              };
         return;
       }
 
