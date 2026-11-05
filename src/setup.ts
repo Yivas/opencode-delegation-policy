@@ -44,9 +44,14 @@ export type Wiring = {
 };
 
 export type AgentInspection = {
+  readonly registration: RegistrationState;
   readonly advisors: readonly AdvisorSafetyIssue[];
   readonly orphans: readonly string[];
 };
+
+// Why the agents may be missing. `unreadable` is the one that used to be invisible: the plugin starts,
+// registers nothing and, without this value, looks exactly like a plugin that does nothing.
+export type RegistrationState = "pending" | "registered" | "unreadable";
 
 export function createWiring(ports: HostPorts): Wiring {
   const store = new PreferenceStore(ports.storage);
@@ -57,6 +62,7 @@ export function createWiring(ports: HostPorts): Wiring {
   let advisorSelections: readonly AdvisorSelection[] = [];
   let registration: { dispose(): Promise<void> } | undefined;
   let registered = false;
+  let state: RegistrationState = "pending";
 
   const definitions = (): readonly AgentDefinition[] =>
     agentDefinitions({
@@ -80,7 +86,9 @@ export function createWiring(ports: HostPorts): Wiring {
         });
       } catch {
         // A preference document that cannot be read must not stop the plugin from loading; the
-        // agents it already has stay as they are until the next pass.
+        // agents it already has stay as they are until the next pass. The reason is kept so the
+        // status can say so instead of looking like a plugin that does nothing.
+        state = "unreadable";
         return;
       }
       if (validation.delegation.status !== "error") {
@@ -105,16 +113,19 @@ export function createWiring(ports: HostPorts): Wiring {
         });
       });
       registered = true;
+      state = "registered";
     },
 
     async inspect() {
       // Before the plugin registered anything there is nothing to compare against: the host cannot
       // have our agents yet, and reporting every slot as missing would be noise.
-      if (!registered) return { advisors: [], orphans: [] };
+      if (!registered)
+        return { registration: state, advisors: [], orphans: [] };
       const current = definitions();
       const listed = await ports.agentList();
       const effective = effectiveAgents(listed);
       return {
+        registration: state,
         advisors: advisorSafetyIssues({ definitions: current, effective }),
         orphans: orphanAgentIDs({ definitions: current, effective }),
       };
@@ -124,6 +135,7 @@ export function createWiring(ports: HostPorts): Wiring {
       await registration?.dispose();
       registration = undefined;
       registered = false;
+      state = "pending";
     },
   };
 }

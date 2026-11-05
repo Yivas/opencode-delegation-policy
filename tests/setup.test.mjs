@@ -338,6 +338,51 @@ test("an agent under the plugin's prefix that the configuration no longer define
   assert.deepEqual((await wiring.inspect()).orphans, ["ocv2-advisor-9"]);
 });
 
+test("an unreadable preference document leaves the plugin running and says why", async () => {
+  const records = new Map();
+  // Not even valid JSON: the store cannot read it and setup must survive it.
+  records.set("preferences.v1.global", "{not json");
+  const agent = transformDouble();
+  const wiring = createWiring({
+    storage: storageDouble(records),
+    catalog: catalogDouble([
+      model("acme", "small-model"),
+      model("acme", "advisor-model"),
+    ]),
+    agentTransform: agent.transform,
+    agentList: async () => ({ data: [] }),
+  });
+
+  await wiring.register();
+
+  // Nothing registered, nothing thrown, and the state says why so a status surface can report it.
+  assert.deepEqual(agent.callbacks.length, 0);
+  assert.deepEqual(await wiring.inspect(), {
+    registration: "unreadable",
+    advisors: [],
+    orphans: [],
+  });
+});
+
+test("a successful registration is reported as such", async () => {
+  const records = new Map();
+  storagedefaults(records, defaults());
+  const wiring = createWiring({
+    storage: storageDouble(records),
+    catalog: catalogDouble([
+      model("acme", "small-model"),
+      model("acme", "advisor-model"),
+    ]),
+    agentTransform: async () => ({ dispose: async () => {} }),
+    agentList: async () => ({ data: deniedAdvisorSlots([1, 2, 3]) }),
+  });
+
+  assert.equal((await wiring.inspect()).registration, "pending");
+  await wiring.register();
+
+  assert.equal((await wiring.inspect()).registration, "registered");
+});
+
 test("registering again after a configuration change updates the registered agents", async () => {
   const records = new Map();
   storagedefaults(records, defaults());
