@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin/tui";
 
 import { delegateRpc } from "./rpc.js";
+import { chooseDelegateLine, type SelectorDialogs } from "./selector.js";
 
 // The TUI side of the minimal `/delegate` command. The server owns the preferences, so this only
 // forwards the line over RPC and shows the answer in a dialog: a dialog is something the person
@@ -63,18 +64,34 @@ export type DelegateTuiPorts = {
     title: string;
     message: string;
   }) => Promise<void>;
+  // The host's dialogs for the interactive selector. Without them a bare `/delegate` shows the
+  // status, as typed commands always can.
+  readonly dialogs?: SelectorDialogs;
 };
 
-// What `/delegate` does in the TUI, separated from the host context so it can be exercised alone.
+// What `/delegate` does in the TUI, separated from the host context so it can be exercised alone. A
+// bare `/delegate` opens the selector, which builds the same line a person could type.
 export async function runDelegateInTui(
   input: string | undefined,
   ports: DelegateTuiPorts,
 ): Promise<void> {
+  let line = (input ?? "").trim();
+  if (line === "/delegate") line = "";
+  if (line === "" && ports.dialogs !== undefined) {
+    const chosen = await chooseDelegateLine(
+      ports.dialogs,
+      ports.sessionID() !== undefined,
+    );
+    // Cancelling the selector is not a request: nothing is sent and nothing is shown.
+    if (chosen === undefined) return;
+    line = chosen;
+  }
+
   let message: string;
   try {
     const sessionID = ports.sessionID();
     const answer = await ports.rpc(delegateRpc).run({
-      line: input ?? "",
+      line,
       ...(sessionID === undefined ? {} : { sessionID }),
     });
     // A reply without text would otherwise show an empty dialog that looks like a success.
@@ -101,6 +118,10 @@ const plugin: Plugin.Definition = {
             runDelegateInTui(input, {
               rpc: (definition) => context.client.rpc(definition),
               alert: (options) => context.ui.dialog.alert(options),
+              dialogs: {
+                select: (options) => context.ui.dialog.select(options),
+                prompt: (options) => context.ui.dialog.prompt(options),
+              },
               sessionID: () => {
                 const route = context.ui.router.current();
                 return route.type === "session" ? route.sessionID : undefined;
