@@ -43,7 +43,10 @@ export type Wiring = {
 export function createWiring(ports: HostPorts): Wiring {
   const store = new PreferenceStore(ports.storage);
   const created = new Set<string>();
-  let definitions: readonly AgentDefinition[] = [];
+  // Kept per axis: an axis that cannot be validated keeps its previous agents instead of taking them
+  // away, and the other axis still registers normally.
+  let roleDefinitions: readonly AgentDefinition[] = [];
+  let advisorDefinitions: readonly AgentDefinition[] = [];
   let registration: { dispose(): Promise<void> } | undefined;
 
   return {
@@ -57,22 +60,23 @@ export function createWiring(ports: HostPorts): Wiring {
         preferences,
         catalog: ports.catalog,
       });
-      const next = definitionsFor(validation);
-      if (next === undefined) {
-        // One axis cannot be validated, so nothing is registered or removed this pass.
-        return;
-      }
-      definitions = next;
+      const next = definitionsFor(validation, {
+        roles: roleDefinitions,
+        advisors: advisorDefinitions,
+      });
+      roleDefinitions = next.roles;
+      advisorDefinitions = next.advisors;
+      const definitions = [...roleDefinitions, ...advisorDefinitions];
       registration ??= await ports.agentTransform((editor) => {
         registerAgentDefinitions({ editor, definitions, created });
       });
     },
 
     async advisorSafety() {
-      if (definitions.length === 0) return [];
+      if (advisorDefinitions.length === 0) return [];
       const listed = await ports.agentList();
       return advisorSafetyIssues({
-        definitions,
+        definitions: advisorDefinitions,
         effective: effectiveAgents(listed),
       });
     },
@@ -84,23 +88,36 @@ export function createWiring(ports: HostPorts): Wiring {
   };
 }
 
-// An axis in error contributes no definitions, and the whole pass is skipped so nothing is removed.
+// An axis in error keeps the definitions it had: its agents are neither replaced nor removed, while
+// the other axis is still registered. A role with a broken model must not take the rest away.
 function definitionsFor(
   validation: DelegationValidation,
-): readonly AgentDefinition[] | undefined {
-  if (
-    validation.delegation.status === "error" ||
-    validation.advisor.status === "error"
-  ) {
-    return undefined;
-  }
+  previous: {
+    readonly roles: readonly AgentDefinition[];
+    readonly advisors: readonly AgentDefinition[];
+  },
+): { roles: readonly AgentDefinition[]; advisors: readonly AgentDefinition[] } {
   const roles =
-    validation.delegation.status === "active"
-      ? validation.delegation.roles
-      : [];
+    validation.delegation.status === "error"
+      ? previous.roles
+      : agentDefinitions({
+          roles:
+            validation.delegation.status === "active"
+              ? validation.delegation.roles
+              : [],
+          advisors: [],
+        });
   const advisors =
-    validation.advisor.status === "off" ? [] : validation.advisor.advisors;
-  return agentDefinitions({ roles, advisors });
+    validation.advisor.status === "error"
+      ? previous.advisors
+      : agentDefinitions({
+          roles: [],
+          advisors:
+            validation.advisor.status === "off"
+              ? []
+              : validation.advisor.advisors,
+        });
+  return { roles, advisors };
 }
 
 // The host returns its own records; only the fields the check reads are taken, and an entry without

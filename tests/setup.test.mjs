@@ -136,9 +136,9 @@ test("setup registers the roles and advisors of the global defaults", async () =
   assert.equal(agent.agents.get("ocv2-advisor-1")?.mode, "subagent");
 });
 
-test("an axis in error registers nothing and removes nothing", async () => {
+test("a broken advisor model does not stop the roles from registering", async () => {
   const records = new Map();
-  // The advisor model does not exist in the catalogue, so the advisor axis fails.
+  // The advisor model does not exist in the catalogue, so only the advisor axis fails.
   storagedefaults(records, defaults());
   const agent = transformDouble();
   const wiring = createWiring({
@@ -151,9 +151,39 @@ test("an axis in error registers nothing and removes nothing", async () => {
   await wiring.register();
   agent.rebuild();
 
-  // Nothing is registered and the existing agents stay where they are.
-  assert.deepEqual(agent.callbacks.length, 0);
-  assert.deepEqual([...agent.agents.keys()], []);
+  // The valid axis registers; the broken one contributes nothing rather than taking the rest away.
+  assert.deepEqual([...agent.agents.keys()], ["ocv2-small"]);
+});
+
+test("an axis that stops validating keeps its agents instead of removing them", async () => {
+  const records = new Map();
+  storagedefaults(records, defaults());
+  const agent = transformDouble();
+  let models = [model("acme", "small-model"), model("acme", "advisor-model")];
+  const wiring = createWiring({
+    storage: storageDouble(records),
+    catalog: { list: async () => ({ data: models }) },
+    agentTransform: agent.transform,
+    agentList: async () => ({ data: [] }),
+  });
+
+  await wiring.register();
+  agent.rebuild();
+  assert.deepEqual([...agent.agents.keys()].sort(), [
+    "ocv2-advisor-1",
+    "ocv2-small",
+  ]);
+
+  // The advisor leaves the catalogue: its agent must survive, because a transient failure is not a
+  // reason to take away what the user configured.
+  models = [model("acme", "small-model")];
+  await wiring.register();
+  agent.rebuild();
+
+  assert.deepEqual([...agent.agents.keys()].sort(), [
+    "ocv2-advisor-1",
+    "ocv2-small",
+  ]);
 });
 
 test("advisor safety reports an allow the host config appended", async () => {
