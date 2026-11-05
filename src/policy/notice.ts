@@ -107,19 +107,31 @@ export function renderNotice(lines: readonly string[]): string {
 // whatever it sees next, which only means one change may go unannounced.
 const MAX_SESSIONS = 512;
 
+// The notice a turn carries, fixed at the turn's first request as in Pi: an edit made while the
+// turn's tools run is not announced in that same turn (the notice says "before this turn"), and is
+// left for the next one.
+type TurnNotice = {
+  readonly projection: NoticeProjection;
+  readonly text: string | undefined;
+  // Whether a request of this turn actually carried the text. Only a notice the model received can be
+  // consumed; a turn whose requests all failed before attaching it must not consume it.
+  attached: boolean;
+};
+
 type SessionNotice = {
   // What the model has been told: the configuration of the last notice consumed by a successful turn,
   // or the first one this process saw for the session.
   baseline: NoticeProjection;
-  // The configuration shown in the notice of the turn in progress, until that turn succeeds.
-  presented?: NoticeProjection;
+  turn?: TurnNotice;
 };
 
 export type NoticeTracker = {
-  // The notice text for this request, or undefined when nothing changed since the baseline.
+  // The notice text for this request, or undefined when nothing changed since the baseline. Calling
+  // it means the caller is about to attach the text.
   forRequest(sessionID: string, current: NoticeProjection): string | undefined;
-  // A turn that succeeded consumed whatever notice it carried.
-  succeeded(sessionID: string): void;
+  // A turn ended. Only a successful turn that carried the notice consumes it; any other ending leaves
+  // it for the next turn, which compares afresh.
+  ended(sessionID: string, succeeded: boolean): void;
 };
 
 export function createNoticeTracker(): NoticeTracker {
@@ -137,20 +149,25 @@ export function createNoticeTracker(): NoticeTracker {
         }
         return undefined;
       }
-      const lines = noticeLines(known.baseline, current);
-      if (lines.length === 0) {
-        // No change, or a change that was reverted before any turn consumed it.
-        known.presented = undefined;
-        return undefined;
+      if (known.turn === undefined) {
+        // No change, or a change reverted before any turn consumed it, gives a turn without text.
+        const lines = noticeLines(known.baseline, current);
+        known.turn = {
+          projection: current,
+          text: lines.length === 0 ? undefined : renderNotice(lines),
+          attached: false,
+        };
       }
-      known.presented = current;
-      return renderNotice(lines);
+      if (known.turn.text !== undefined) known.turn.attached = true;
+      return known.turn.text;
     },
-    succeeded(sessionID) {
+    ended(sessionID, succeeded) {
       const known = sessions.get(sessionID);
-      if (known?.presented === undefined) return;
-      known.baseline = known.presented;
-      known.presented = undefined;
+      if (known?.turn === undefined) return;
+      if (succeeded && known.turn.attached) {
+        known.baseline = known.turn.projection;
+      }
+      known.turn = undefined;
     },
   };
 }

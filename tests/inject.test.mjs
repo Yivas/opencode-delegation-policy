@@ -148,7 +148,7 @@ test("turning delegation off removes the block on the next request and touches n
   });
 
   // After that turn succeeds, nothing of the plugin's is left at all.
-  injector.turnSucceeded("root");
+  injector.turnEnded("root", true);
   await injector.apply({ sessionID: "root", agent: "build", system });
   assert.deepEqual(system, [OTHER]);
 });
@@ -330,6 +330,64 @@ test("a host agent list that cannot be read leaves no block and says so", async 
     outcome: "failed",
     reason: "agent-lookup",
   });
+});
+
+test("a notice the model never received is not consumed by a later success", async () => {
+  const { store } = await activeStore();
+  let agentsFail = false;
+  const injector = createPolicyInjector({
+    store,
+    catalog,
+    ...sessions(),
+    agents: async () => {
+      if (agentsFail) throw new Error("host detail");
+      return REGISTERED;
+    },
+  });
+  const turn = async () => {
+    const system = [];
+    await injector.apply({ sessionID: "root", agent: "build", system });
+    return system;
+  };
+  await turn();
+  injector.turnEnded("root", true);
+
+  await store.applySession("root", { intensity: "aggressive" });
+  assert.equal((await turn()).length, 2);
+  injector.turnEnded("root", false);
+
+  // The next turn cannot even read the agents, so it carries nothing; its success consumes nothing.
+  agentsFail = true;
+  assert.equal((await turn()).length, 0);
+  injector.turnEnded("root", true);
+
+  agentsFail = false;
+  const recovered = await turn();
+  assert.match(recovered[1].text, /normal -> aggressive/);
+});
+
+test("a change made while a turn runs waits for the next turn", async () => {
+  const { store } = await activeStore();
+  const injector = createPolicyInjector({ store, catalog, ...sessions() });
+  const request = async () => {
+    const system = [];
+    await injector.apply({ sessionID: "root", agent: "build", system });
+    return system;
+  };
+  await request();
+  injector.turnEnded("root", true);
+
+  // First request of a turn, then the setting changes during a tool, then the continuation.
+  assert.equal((await request()).length, 1);
+  await store.applySession("root", { intensity: "aggressive" });
+  const continuation = await request();
+  assert.equal(continuation.length, 1);
+  assert.match(continuation[0].text, /Intensity: aggressive\./);
+  injector.turnEnded("root", true);
+
+  // The next turn says it, since the notice reads "changed before this turn".
+  const next = await request();
+  assert.match(next[1].text, /normal -> aggressive/);
 });
 
 test("a block left by an earlier version is recognised by its marker and replaced", () => {

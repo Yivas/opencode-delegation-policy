@@ -89,7 +89,7 @@ test("a notice repeats within the turn and is consumed only when the turn succee
   assert.match(first, /Delegation intensity: normal -> aggressive/);
   assert.equal(again, first);
 
-  tracker.succeeded("ses");
+  tracker.ended("ses", true);
   assert.equal(tracker.forRequest("ses", changed), undefined);
 });
 
@@ -99,7 +99,8 @@ test("a turn that did not succeed leaves the notice for the next one", () => {
   const changed = projectNotice(preferences({ intensity: "aggressive" }));
   tracker.forRequest("ses", changed);
 
-  // No success arrived (failed or interrupted): the next turn still says it.
+  // The turn failed or was interrupted: the next turn still says it.
+  tracker.ended("ses", false);
   assert.match(tracker.forRequest("ses", changed), /normal -> aggressive/);
 });
 
@@ -108,10 +109,11 @@ test("a change reverted before any turn consumed it says nothing", () => {
   const original = projectNotice(preferences());
   tracker.forRequest("ses", original);
   tracker.forRequest("ses", projectNotice(preferences({ intensity: "off" })));
+  tracker.ended("ses", false);
 
   assert.equal(tracker.forRequest("ses", original), undefined);
   // And a success then consumes nothing, so a later change is still measured from the original.
-  tracker.succeeded("ses");
+  tracker.ended("ses", true);
   assert.match(
     tracker.forRequest(
       "ses",

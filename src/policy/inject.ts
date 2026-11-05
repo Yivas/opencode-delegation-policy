@@ -10,6 +10,7 @@ import {
   createNoticeTracker,
   NOTICE_MARKER,
   NOTICE_METADATA_KEY,
+  type NoticeProjection,
   type NoticeTracker,
   projectNotice,
 } from "./notice.js";
@@ -131,8 +132,9 @@ export type PolicyInjector = {
     system: SystemPart[];
   }): Promise<void>;
   last(): InjectionReport;
-  // The session's turn finished successfully, so the notice it carried has been read.
-  turnSucceeded(sessionID: string): void;
+  // The session's turn ended. A successful turn consumed the notice it carried; another ending
+  // leaves it for the next turn.
+  turnEnded(sessionID: string, succeeded: boolean): void;
 };
 
 // Sessions whose parent is remembered. Past it the oldest is forgotten and simply looked up again,
@@ -192,17 +194,12 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
       }
 
       let block: string | undefined;
-      let notice: string | undefined;
+      let projection: NoticeProjection;
       try {
         const { preferences } = await ports.store.readSession(
           request.sessionID,
         );
-        // The notice follows the configuration, not the block: turning both axes off still says so
-        // once, on a request that then carries no policy.
-        notice = notices.forRequest(
-          request.sessionID,
-          projectNotice(preferences),
-        );
+        projection = projectNotice(preferences);
         const validation = restrictToRegistered(
           await validatePreferenceAxes({
             preferences,
@@ -223,6 +220,10 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
         return;
       }
 
+      // The notice follows the configuration, not the block: turning both axes off still says so
+      // once, on a request that then carries no policy. It is taken only here, where it is certainly
+      // attached, so a request that failed above never counts as having delivered it.
+      const notice = notices.forRequest(request.sessionID, projection);
       replacePolicyBlock(request.system, block, notice);
       report =
         block === undefined
@@ -230,6 +231,6 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
           : { outcome: "injected" };
     },
     last: () => report,
-    turnSucceeded: (sessionID) => notices.succeeded(sessionID),
+    turnEnded: (sessionID, succeeded) => notices.ended(sessionID, succeeded),
   };
 }

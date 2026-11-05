@@ -1,6 +1,7 @@
 import type { AgentDefinition } from "../agents/register.js";
 import type { InjectionReport } from "../policy/inject.js";
 import { restrictToRegistered } from "../policy/registered.js";
+import type { TurnWatchState } from "../policy/turns.js";
 import type { AgentInspection } from "../setup.js";
 import type { PreferenceSource, PreferenceView } from "../state/effective.js";
 import {
@@ -52,6 +53,8 @@ export type DelegateCommandPorts = {
   readonly agents?: () => Promise<readonly AgentDefinition[]>;
   // What happened to the policy block on the latest request of the main agent.
   readonly injection?: () => InjectionReport;
+  // Whether the host's event stream, which ends notice turns, is being read.
+  readonly turns?: () => TurnWatchState;
 };
 
 const COMMAND_NAME = "delegate";
@@ -362,6 +365,11 @@ async function report(
   );
   lines.push(...(await describeAgents(ports.inspect)));
   lines.push(describeInjection(ports.injection));
+  if (ports.turns !== undefined && ports.turns() !== "listening") {
+    lines.push(
+      "Notice check: the host's event stream is not being read, so a change notice repeats until it returns.",
+    );
+  }
   lines.push(
     "",
     "Agents are created when OpenCode starts, from the defaults; restart it after changing roles, Advisors or thinking.",

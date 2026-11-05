@@ -2,6 +2,7 @@ import type { Plugin } from "@opencode/plugin";
 
 import { delegateArguments, runDelegate } from "./command/delegate.js";
 import { createPolicyInjector } from "./policy/inject.js";
+import { watchTurns } from "./policy/turns.js";
 import { delegateRpc } from "./rpc.js";
 import { createWiring } from "./setup.js";
 import {
@@ -41,6 +42,7 @@ const delegationPolicy: Plugin.Plugin = {
       inspect: () => wiring.inspect(),
       agents: () => wiring.agents(),
       injection: () => injector.last(),
+      turns: () => turns?.state() ?? "stopped",
       // A lookup that fails is read as "gone": nothing is written for a session the host cannot find.
       sessionExists: (sessionID: string) =>
         context.session.get({ sessionID }).then(
@@ -53,6 +55,7 @@ const delegationPolicy: Plugin.Plugin = {
     // Listens for turns that finished successfully, which consume a configuration notice. It only
     // reads the host's public event stream and stops with the plugin.
     const events = new AbortController();
+    let turns: ReturnType<typeof watchTurns> | undefined;
 
     // Each registration is retired on its own: one that refuses must not leave the others alive. A
     // handle that was retired is forgotten, so a retry does not dispose it twice. The first failure
@@ -112,17 +115,11 @@ const delegationPolicy: Plugin.Plugin = {
       hookRegistration = await context.session.hook("context", (request) =>
         injector.apply(request),
       );
-      void (async () => {
-        for await (const event of context.event.subscribe({
-          signal: events.signal,
-        })) {
-          if (event.type === "session.execution.succeeded") {
-            injector.turnSucceeded(event.data.sessionID);
-          }
-        }
-      })().catch(() => {
-        // A stream that ends or fails only means notices stay until the next successful turn is
-        // seen; it must never take the plugin down.
+      turns = watchTurns({
+        subscribe: (options) => context.event.subscribe(options),
+        ended: (sessionID, succeeded) =>
+          injector.turnEnded(sessionID, succeeded),
+        signal: events.signal,
       });
     } catch (error) {
       // Registration may retain a handle after another setup step fails; retire all before failing.
