@@ -78,12 +78,32 @@ export async function runDelegateInTui(
   let line = (input ?? "").trim();
   if (line === "/delegate") line = "";
   if (line === "" && ports.dialogs !== undefined) {
-    const chosen = await chooseDelegateLine(
-      ports.dialogs,
-      ports.sessionID() !== undefined,
-    );
-    // Cancelling the selector is not a request: nothing is sent and nothing is shown.
-    if (chosen === undefined) return;
+    let chosen: string | undefined;
+    let openedSession: string | undefined;
+    try {
+      openedSession = ports.sessionID();
+      chosen = await chooseDelegateLine(
+        ports.dialogs,
+        openedSession !== undefined,
+      );
+      // Cancelling the selector is not a request: nothing is sent and nothing is shown.
+      if (chosen === undefined) return;
+      if (ports.sessionID() !== openedSession) {
+        await ports.alert({
+          title: TITLE,
+          message:
+            "The open session changed while the selector was open. Nothing was sent. Run /delegate again in the session you want to change.",
+        });
+        return;
+      }
+    } catch {
+      await ports.alert({
+        title: TITLE,
+        message:
+          "The delegation selector could not finish. Nothing was sent. Try again, or type /delegate status to check the settings.",
+      });
+      return;
+    }
     line = chosen;
   }
 

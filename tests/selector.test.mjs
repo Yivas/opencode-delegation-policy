@@ -103,6 +103,50 @@ test("cancelling at any step, or typing nothing usable, builds nothing", async (
   }
 });
 
+test("a selector cannot send its choice after the open session changes", async () => {
+  for (const destination of ["ses_B", undefined]) {
+    let session = "ses_A";
+    const sent = [];
+    const alerts = [];
+    await runDelegateInTui("", {
+      sessionID: () => session,
+      dialogs: {
+        select: async () => {
+          session = destination;
+          return "session-reset";
+        },
+        prompt: async () => undefined,
+      },
+      rpc: () => ({ run: async (input) => sent.push(input) }),
+      alert: async (options) => alerts.push(options),
+    });
+    assert.deepEqual(sent, []);
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0].message, /session changed.*Nothing was sent/s);
+  }
+});
+
+test("dialog failures report that nothing was sent without exposing the host error", async () => {
+  for (const failed of ["select", "prompt"]) {
+    const sent = [];
+    const alerts = [];
+    const scripted = scriptedDialogs(["Defaults: Advisors"]).dialogs;
+    scripted[failed] = async () => {
+      throw new Error("private host error");
+    };
+    await runDelegateInTui("", {
+      sessionID: () => "ses_A",
+      dialogs: scripted,
+      rpc: () => ({ run: async (input) => sent.push(input) }),
+      alert: async (options) => alerts.push(options),
+    });
+    assert.deepEqual(sent, []);
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0].message, /could not finish.*Nothing was sent/s);
+    assert.doesNotMatch(alerts[0].message, /private host error/);
+  }
+});
+
 test("a bare /delegate opens the selector and sends what it built; cancelling sends nothing", async () => {
   const sent = [];
   const alerts = [];
