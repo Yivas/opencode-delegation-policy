@@ -311,3 +311,33 @@ test("returned cleanup preserves retryable disposal behavior", async () => {
   assert.equal(state.disposed, 1);
   assert.equal(state.transforms.length, 0);
 });
+
+test("a retirement that fails does not leave the other registrations alive", async () => {
+  const { context, state } = setupContext([eligible()], { disposeFailures: 1 });
+  const cleanup = await delegationPolicy.setup(context);
+  assert.equal(state.commands.length, 1);
+  assert.equal(state.agentCallbacks.length, 1);
+
+  await assert.rejects(cleanup());
+
+  // The model registration refused, yet the command and the agents were still retired, in one pass.
+  assert.equal(state.commands.length, 0);
+  assert.equal(state.agentCallbacks.length, 0);
+});
+
+test("the registered command answers through the session it was run from", async () => {
+  const { context, state } = setupContext([eligible()]);
+  await delegationPolicy.setup(context);
+
+  await state.commands[0].execute({
+    sessionID: "ses_one",
+    prompt: { text: "/delegate intensity normal" },
+  });
+
+  assert.equal(state.synthetic.length, 1);
+  assert.equal(state.synthetic[0].sessionID, "ses_one");
+  assert.equal(state.synthetic[0].resume, false);
+  assert.match(state.synthetic[0].text, /Intensity: normal/);
+  // Registration already ran before the command, so the status reports a real agent check.
+  assert.match(state.synthetic[0].text, /Agent check: nothing to report/);
+});

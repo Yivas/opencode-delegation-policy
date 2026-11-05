@@ -1,3 +1,4 @@
+import type { AgentInspection } from "../setup.js";
 import type { PreferenceView } from "../state/effective.js";
 import {
   ADVISOR_MODES,
@@ -5,12 +6,12 @@ import {
   INTENSITIES,
   MAX_ADVISORS,
   PreferenceStateError,
+  ROLE_KEYS,
   type RoleKey,
   type RoleSetting,
 } from "../state/schema.js";
 import type { PreferenceStore } from "../state/store.js";
 import {
-  type DelegationValidation,
   type ModelCatalog,
   type ValidationIssue,
   validatePreferenceAxes,
@@ -24,25 +25,34 @@ import {
 export type DelegateCommandPorts = {
   readonly store: Pick<PreferenceStore, "readGlobal" | "saveDefaults">;
   readonly catalog: ModelCatalog;
+  // The check of the agents the host actually ended up with. Without it the status has nothing to
+  // say about them, and says so instead of looking clean.
+  readonly inspect?: () => Promise<AgentInspection>;
 };
 
 const COMMAND_NAME = "delegate";
 
-// The name a user types for each role. `visual-design` is hyphenated because that is how the
-// registered agent is spelled; the stored key keeps the code's camelCase.
-const ROLE_NAMES: Readonly<Record<string, RoleKey>> = {
+// The name a user types for each role. Typed by RoleKey so a new role cannot be added without a name
+// here, and the report walks ROLE_KEYS so it cannot leave one out. `visual-design` is hyphenated
+// because that is how the registered agent is spelled.
+const ROLE_NAMES: Readonly<Record<RoleKey, string>> = {
   small: "small",
   medium: "medium",
   large: "large",
-  "visual-design": "visualDesign",
+  visualDesign: "visual-design",
 };
+
+function roleKeyFor(name: string | undefined): RoleKey | undefined {
+  return ROLE_KEYS.find((key) => ROLE_NAMES[key] === name);
+}
 
 const USAGE = [
   "Usage:",
-  "  /delegate                              show the saved defaults and whether they work",
+  "  /delegate [status]                     show the saved defaults and whether they work",
+  "  /delegate help                         show this text",
   `  /delegate intensity <${INTENSITIES.join("|")}>`,
   `  /delegate advisor-mode <${ADVISOR_MODES.join("|")}>`,
-  `  /delegate role <${Object.keys(ROLE_NAMES).join("|")}> <provider/model[#variant]|off|unset>`,
+  `  /delegate role <${ROLE_KEYS.map((key) => ROLE_NAMES[key]).join("|")}> <provider/model[#variant]|off|unset>`,
   `  /delegate advisors <off|unset|provider/model[#variant] ...>   up to ${MAX_ADVISORS} models`,
   "",
   "Agents are created when OpenCode starts, so a change takes effect after you restart it.",
@@ -54,7 +64,9 @@ export function delegateArguments(text: string): string {
   const trimmed = text.trim();
   const slash = `/${COMMAND_NAME}`;
   if (trimmed === slash) return "";
-  if (trimmed.startsWith(`${slash} `)) return trimmed.slice(slash.length + 1);
+  if (trimmed.startsWith(slash) && /\s/.test(trimmed.charAt(slash.length))) {
+    return trimmed.slice(slash.length).trim();
+  }
   return trimmed;
 }
 
@@ -66,7 +78,17 @@ export async function runDelegate(
   const [subcommand, ...rest] = words;
 
   if (subcommand === undefined || subcommand === "status") {
-    return report(await ports.store.readGlobal(), ports.catalog, undefined);
+    try {
+      return await report(await ports.store.readGlobal(), ports, undefined);
+    } catch (error) {
+      // The same document that would be refused on save has to be explained on read: a command whose
+      // whole job is the report cannot answer with a raw rejection. The store's messages carry no
+      // stored value. Anything else is a defect and surfaces as one.
+      if (error instanceof PreferenceStateError) {
+        return `The saved defaults cannot be read: ${error.message}`;
+      }
+      throw error;
+    }
   }
   if (subcommand === "help") return USAGE;
 
@@ -75,12 +97,14 @@ export async function runDelegate(
 
   try {
     const view = await ports.store.saveDefaults(change);
-    return report(view, ports.catalog, "Saved.");
+    return await report(view, ports, "Saved.");
   } catch (error) {
-    // The store's messages carry no stored value, so they are safe to show; anything else is a
-    // defect and must surface as one.
     if (error instanceof PreferenceStateError) {
-      return `Not saved: ${error.message}`;
+      // A write that rejected may still have landed, and the store says so; "Not saved" would
+      // contradict it.
+      return error.persistence === "unknown"
+        ? `Could not confirm the save: ${error.message}`
+        : `Not saved: ${error.message}`;
     }
     throw error;
   }
@@ -108,21 +132,25 @@ function parseChange(
     }
     case "role": {
       const [name, value, ...extra] = rest;
-      const key = name === undefined ? undefined : ROLE_NAMES[name];
+      const key = roleKeyFor(name);
       if (key === undefined || value === undefined || extra.length > 0) {
-        return `role takes a name (${Object.keys(ROLE_NAMES).join(", ")}) and a model, off or unset.`;
+        return `role takes a name (${ROLE_KEYS.map((role) => ROLE_NAMES[role]).join(", ")}) and a model, off or unset.`;
       }
       return { roles: { [key]: roleSetting(value) } };
     }
     case "advisors": {
+      const keyword = rest.find((word) => word === "off" || word === "unset");
+      if (keyword !== undefined) {
+        // A keyword mixed with models would be saved as a model reference called "off".
+        if (rest.length > 1) {
+          return `advisors ${keyword} cannot be combined with models.`;
+        }
+        return {
+          advisors: { kind: keyword === "off" ? "disabled" : "unset" },
+        };
+      }
       if (rest.length === 0) {
-        return "advisors takes off, unset or up to three model references.";
-      }
-      if (rest.length === 1 && rest[0] === "off") {
-        return { advisors: { kind: "disabled" } };
-      }
-      if (rest.length === 1 && rest[0] === "unset") {
-        return { advisors: { kind: "unset" } };
+        return `advisors takes off, unset or up to ${MAX_ADVISORS} model references.`;
       }
       if (rest.length > MAX_ADVISORS) {
         return `advisors takes at most ${MAX_ADVISORS} models.`;
@@ -149,7 +177,7 @@ function isOneOf<T extends string>(
 
 async function report(
   view: PreferenceView,
-  catalog: ModelCatalog,
+  ports: DelegateCommandPorts,
   heading: string | undefined,
 ): Promise<string> {
   const { preferences } = view;
@@ -160,14 +188,18 @@ async function report(
     `Intensity: ${preferences.intensity}`,
     `Advisor mode: ${preferences.advisorMode}`,
   );
-  for (const [name, key] of Object.entries(ROLE_NAMES)) {
-    lines.push(`Role ${name}: ${describeRole(preferences.roles[key])}`);
+  for (const key of ROLE_KEYS) {
+    lines.push(
+      `Role ${ROLE_NAMES[key]}: ${describeRole(preferences.roles[key])}`,
+    );
   }
   lines.push(`Advisors: ${describeAdvisors(preferences.advisors)}`);
 
   // Saving a value the catalogue does not offer is allowed (a provider may simply be offline), so
-  // what the saved defaults actually do is reported separately and never hidden.
-  lines.push(...(await describeValidation(preferences, catalog)));
+  // what the saved defaults actually do is reported separately and never hidden. The validator turns
+  // a catalogue failure into its own result; anything it throws is a defect and is not swallowed.
+  lines.push(...(await describeValidation(preferences, ports.catalog)));
+  lines.push(...(await describeAgents(ports.inspect)));
   lines.push(
     "",
     "Agents are created when OpenCode starts; restart it for changes to take effect.",
@@ -191,36 +223,73 @@ async function describeValidation(
   preferences: PreferenceView["preferences"],
   catalog: ModelCatalog,
 ): Promise<string[]> {
-  let validation: DelegationValidation;
-  try {
-    validation = await validatePreferenceAxes({ preferences, catalog });
-  } catch {
-    return ["Check: the model catalogue could not be read."];
-  }
+  const { delegation, advisor } = await validatePreferenceAxes({
+    preferences,
+    catalog,
+  });
   const lines: string[] = [];
-  const { delegation, advisor } = validation;
 
   lines.push(
     delegation.status === "active"
-      ? `Delegation: active, roles ${delegation.roles.map((role) => role.role).join(", ")}`
+      ? `Delegation check: active, roles ${delegation.roles.map((role) => role.role).join(", ")}`
       : delegation.status === "off"
-        ? "Delegation: off"
-        : `Delegation: ${describeIssues(delegation.issues)}`,
+        ? "Delegation check: off"
+        : `Delegation check: ${describeIssues(delegation.issues)}`,
   );
   if (advisor.status === "off") {
-    lines.push("Advisors: off");
+    lines.push("Advisor check: off");
   } else if (advisor.status === "error") {
-    lines.push(`Advisors: ${describeIssues(advisor.issues)}`);
+    lines.push(`Advisor check: ${describeIssues(advisor.issues)}`);
   } else {
     const usable = advisor.advisors.map((entry) => entry.advisor).join(", ");
     const trouble =
       advisor.status === "partial" ? `; ${describeIssues(advisor.issues)}` : "";
-    lines.push(`Advisors: ${advisor.status}, usable ${usable}${trouble}`);
+    lines.push(`Advisor check: ${advisor.status}, usable ${usable}${trouble}`);
     for (const warning of advisor.warnings) {
       lines.push(`  warning: ${describeIssue(warning)}`);
     }
   }
   return lines;
+}
+
+// What the plugin found out about its own agents after the host applied its configuration. Silence
+// would be ambiguous (nothing wrong, or nothing looking), so every outcome has a line of its own.
+async function describeAgents(
+  inspect: DelegateCommandPorts["inspect"],
+): Promise<string[]> {
+  if (inspect === undefined) return ["Agent check: not available."];
+
+  let inspection: AgentInspection;
+  try {
+    inspection = await inspect();
+  } catch {
+    // The host's own message is not shown: it is not ours to vouch for.
+    return ["Agent check: the host's agent list could not be read."];
+  }
+
+  if (inspection.registration === "unreadable") {
+    return [
+      "Agent check: the saved defaults could not be read when OpenCode started, so no agents were created.",
+    ];
+  }
+  if (inspection.registration === "pending") {
+    return ["Agent check: not run yet; the agents are not registered."];
+  }
+
+  const lines: string[] = [];
+  for (const issue of inspection.advisors) {
+    lines.push(
+      issue.kind === "unregistered"
+        ? `Agent check: ${issue.id} is configured but the host does not have it.`
+        : `Agent check: ${issue.id} can still do ${issue.actions.join(", ")}; something re-enabled actions on an agent that must have none.`,
+    );
+  }
+  for (const id of inspection.orphans) {
+    lines.push(
+      `Agent check: ${id} is left over from an earlier configuration and is still launchable; remove it from your OpenCode agent configuration.`,
+    );
+  }
+  return lines.length > 0 ? lines : ["Agent check: nothing to report."];
 }
 
 function describeIssues(issues: readonly ValidationIssue[]): string {

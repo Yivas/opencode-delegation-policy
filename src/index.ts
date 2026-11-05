@@ -27,19 +27,38 @@ const delegationPolicy: Plugin.Plugin = {
     const command = createDelegateCommand({
       store: wiring.store,
       catalog: context.model,
+      inspect: () => wiring.inspect(),
       // Unverified against a real host: whether a synthetic message is shown to the user, and
       // whether it starts a model turn. `resume: false` asks for neither a turn nor a side effect.
       reply: async (sessionID, text) => {
-        await context.session.synthetic({
-          sessionID: sessionID as Parameters<
-            typeof context.session.synthetic
-          >[0]["sessionID"],
-          text,
-          resume: false,
-        });
+        await context.session.synthetic({ sessionID, text, resume: false });
       },
     });
     let commandRegistration: { dispose: () => Promise<void> } | undefined;
+
+    // Each registration is retired on its own: one that refuses must not leave the others alive. A
+    // handle that was retired is forgotten, so a retry does not dispose it twice. The first failure
+    // is the one reported, after everything had its turn.
+    const retireAll = async (): Promise<void> => {
+      const failures: unknown[] = [];
+      const attempt = async (retire: () => Promise<void>) => {
+        try {
+          await retire();
+        } catch (error) {
+          failures.push(error);
+        }
+      };
+      const handle = commandRegistration;
+      if (handle !== undefined) {
+        await attempt(async () => {
+          await handle.dispose();
+          commandRegistration = undefined;
+        });
+      }
+      await attempt(() => wiring.dispose());
+      await attempt(() => provisioner.dispose());
+      if (failures.length > 0) throw failures[0];
+    };
 
     try {
       await provisioner.register();
@@ -49,17 +68,13 @@ const delegationPolicy: Plugin.Plugin = {
       });
     } catch (error) {
       // Registration may retain a handle after another setup step fails; retire all before failing.
-      await commandRegistration?.dispose();
-      await wiring.dispose();
-      await provisioner.dispose();
+      // A retirement that fails is the error reported, as it was before the command existed: it means
+      // something may still be registered, which matters more than why setup stopped.
+      await retireAll();
       throw error;
     }
 
-    return async () => {
-      await commandRegistration?.dispose();
-      await wiring.dispose();
-      await provisioner.dispose();
-    };
+    return retireAll;
   },
 };
 
