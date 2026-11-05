@@ -1,4 +1,8 @@
-import type { AgentDefinition, AgentPermission } from "./register.js";
+import {
+  AGENT_PREFIX,
+  type AgentDefinition,
+  type AgentPermission,
+} from "./register.js";
 
 // The host applies `opencode.config.agent` after the plugin's transform and the last matching
 // permission rule wins, so the user's own configuration can append an `allow` after the advisor's
@@ -7,8 +11,8 @@ import type { AgentDefinition, AgentPermission } from "./register.js";
 // stopped being advice-only. This module is that check, and it is pure so the caller decides what
 // to do with the result.
 
-// Actions the host documents today. The list is not a boundary by itself: an action named by the
-// effective rules is checked too, and the wildcard rule covers anything else.
+// Actions the host documents today. The wildcard rule covers anything else, and an action named by
+// the effective rules is checked too.
 const KNOWN_ACTIONS = [
   "read",
   "edit",
@@ -21,6 +25,10 @@ const KNOWN_ACTIONS = [
   "external_directory",
 ] as const;
 
+// One source for the deny list: the advisor registration and this check must agree, or an action
+// added in one place would silently stop being covered by the other.
+export const ADVISOR_DENIED_ACTIONS = KNOWN_ACTIONS;
+
 export type EffectiveAgent = {
   readonly id: string;
   readonly permissions: readonly AgentPermission[];
@@ -29,14 +37,18 @@ export type EffectiveAgent = {
 export type AdvisorSafetyIssue =
   | { readonly kind: "unregistered"; readonly id: string }
   | {
-      readonly kind: "actions-allowed";
+      readonly kind: "actions-not-denied";
       readonly id: string;
       readonly actions: readonly string[];
     };
 
+export function isAdvisorAgentID(id: string): boolean {
+  return id.startsWith(`${AGENT_PREFIX}advisor-`);
+}
+
 // An advisor is safe only while every action still resolves to deny after the whole rule list is
-// applied. A rule the plugin did not write, appended later for a narrower resource, is a hole for
-// that action: it would let the child act on that resource.
+// applied. Anything that leaves part of an action's space open is reported: a later `allow` for one
+// resource, an `ask`, or no matching rule at all.
 export function advisorSafetyIssues(input: {
   readonly definitions: readonly AgentDefinition[];
   readonly effective: readonly EffectiveAgent[];
@@ -44,42 +56,45 @@ export function advisorSafetyIssues(input: {
   const issues: AdvisorSafetyIssue[] = [];
   const byID = new Map(input.effective.map((agent) => [agent.id, agent]));
   for (const definition of input.definitions) {
-    if (definition.permissions === undefined) continue;
+    if (!isAdvisorAgentID(definition.id)) continue;
     const agent = byID.get(definition.id);
     if (agent === undefined) {
       issues.push({ kind: "unregistered", id: definition.id });
       continue;
     }
-    const actions = allowedActions(agent.permissions);
+    const actions = actionsNotDenied(agent.permissions);
     if (actions.length > 0) {
-      issues.push({ kind: "actions-allowed", id: definition.id, actions });
+      issues.push({
+        kind: "actions-not-denied",
+        id: definition.id,
+        actions,
+      });
     }
   }
   return issues;
 }
 
-// Which actions still end on something other than `deny` once the documented matcher runs: the last
-// rule whose action matches exactly or through the wildcard decides.
-export function allowedActions(
+// Which actions are not closed once the documented matcher runs. For one action, a rule with the
+// wildcard resource decides the whole resource space; a narrower deny removes nothing, and a
+// narrower `allow` or `ask` opens the part of the space it names. So an action is safe only when
+// the last rule that can affect any of its resources leaves it closed by a wildcard deny.
+export function actionsNotDenied(
   rules: readonly AgentPermission[],
 ): readonly string[] {
   const candidates = new Set<string>([...KNOWN_ACTIONS, "*"]);
   for (const rule of rules) {
     candidates.add(rule.action);
   }
-  const allowed: string[] = [];
+  const open: string[] = [];
   for (const action of candidates) {
-    let decision: AgentPermission["effect"] | undefined;
+    let closed = false;
     for (const rule of rules) {
-      if (rule.action === action || rule.action === "*") {
-        decision = rule.effect;
-      }
+      if (rule.action !== action && rule.action !== "*") continue;
+      closed = rule.effect === "deny" ? rule.resource === "*" || closed : false;
     }
     // No matching rule falls back to "ask", which in a background child can block the work, so it
     // is not treated as safe either.
-    if (decision !== "deny") {
-      allowed.push(action);
-    }
+    if (!closed) open.push(action);
   }
-  return allowed.sort();
+  return open.sort();
 }

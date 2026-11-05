@@ -1,45 +1,33 @@
 import type { Plugin } from "@opencode/plugin";
 
+import type { RoleKey } from "../state/schema.js";
 import type { AdvisorSelection, RoleSelection } from "../validation/models.js";
+import { ADVISOR_DENIED_ACTIONS } from "./safety.js";
 
 // Product-owned agent ids. These exact ids are managed by the plugin: the editor has no owner field
-// and no `add`, so registration upserts them and the product documents them as reserved. Nothing
-// else is touched, and no other `ocv2-` id is claimed.
+// and no `add`, so registration upserts them. Nothing else is touched, and no other `ocv2-` id is
+// claimed.
 export const AGENT_PREFIX = "ocv2-";
 
-const ROLE_AGENT_IDS = {
-  small: "ocv2-small",
-  medium: "ocv2-medium",
-  large: "ocv2-large",
-  visualDesign: "ocv2-visual-design",
-} as const;
-
-const ROLE_AGENT_NAMES = {
-  small: "Small",
-  medium: "Medium",
-  large: "Large",
-  visualDesign: "Visual Design",
-} as const;
+// Typed by RoleKey on purpose: adding a role without an entry here becomes a compile error instead
+// of an agent that is silently never registered.
+const ROLE_AGENTS: Readonly<Record<RoleKey, { id: string; name: string }>> = {
+  small: { id: `${AGENT_PREFIX}small`, name: "Small" },
+  medium: { id: `${AGENT_PREFIX}medium`, name: "Medium" },
+  large: { id: `${AGENT_PREFIX}large`, name: "Large" },
+  visualDesign: {
+    id: `${AGENT_PREFIX}visual-design`,
+    name: "Visual Design",
+  },
+};
 
 // `action` and `resource` accept full-value wildcards, the last matching rule wins, an agent's base
 // policy allows everything, and an action no rule matches falls back to "ask" rather than "deny".
 // So the advisor boundary denies every action known today and then denies the wildcard, which has to
 // come last: the enumerated rules still close the door if a wildcard is not honoured, and the
 // wildcard closes actions a later host or another extension adds.
-const ADVISOR_ACTIONS = [
-  "read",
-  "edit",
-  "shell",
-  "execute",
-  "subagent",
-  "skill",
-  "webfetch",
-  "websearch",
-  "external_directory",
-] as const;
-
 const DENY_EVERYTHING = [
-  ...ADVISOR_ACTIONS.map((action) => ({
+  ...ADVISOR_DENIED_ACTIONS.map((action) => ({
     action,
     resource: "*",
     effect: "deny" as const,
@@ -109,10 +97,7 @@ export function agentDefinitions(input: {
 }): readonly AgentDefinition[] {
   const definitions: AgentDefinition[] = [];
   for (const selection of input.roles) {
-    const key = selection.role as keyof typeof ROLE_AGENT_IDS;
-    const id = ROLE_AGENT_IDS[key];
-    if (id === undefined) continue;
-    const name = ROLE_AGENT_NAMES[key];
+    const { id, name } = ROLE_AGENTS[selection.role];
     definitions.push({
       id,
       name,
@@ -138,7 +123,9 @@ export function agentDefinitions(input: {
 
 // The registered agent carries a variant only when the configuration leaves one unambiguous choice.
 // A rule with several proven options is a per-launch decision, so the agent keeps the base model and
-// the policy tells the main agent which variant to pass.
+// the policy tells the main agent which variant to pass. A `#variant` written on a role whose
+// thinking policy is unset is not proven either, so it is not registered: the same rule that keeps
+// an unproven advisor default out of a launch. The policy text is what states both cases.
 function selectionModel(selection: RoleSelection): AgentModel {
   const { model, thinking } = selection;
   const chosen =
@@ -162,7 +149,8 @@ export function advisorAgentID(advisor: number): string {
 // by an earlier configuration cannot keep an old model. Permissions are the exception: an ordinary
 // role leaves the host's base rules alone, because writing an empty list would replace them and
 // every action would fall back to "ask". A definition without permissions therefore skips the
-// field, and only the advisor, which must deny everything, declares a list.
+// field, and only the advisor, which must deny everything, declares a list. The two casts are the
+// host's branded string and model types; the values come from the validated definition.
 export function applyDefinition(
   agent: WritableAgent,
   definition: AgentDefinition,
@@ -172,19 +160,20 @@ export function applyDefinition(
   agent.system = definition.system;
   agent.mode = definition.mode;
   agent.hidden = false;
-  agent.model = definition.model as unknown as WritableAgent["model"];
+  // Copied, not shared: the definition's model can be the same object held in validation output.
+  agent.model = {
+    ...definition.model,
+  } as unknown as WritableAgent["model"];
   if (definition.permissions !== undefined) {
-    agent.permissions = [
-      ...definition.permissions,
-    ] as unknown as WritableAgent["permissions"];
+    agent.permissions = [...definition.permissions];
   }
 }
 
 // The ids above are a reserved namespace, so registration upserts them without inspecting what is
 // there: the editor has no owner field, and every inspectable field can be rewritten by the host
 // config that runs after this transform, which would make our own agents look foreign on the next
-// reload. A user agent that takes one of these exact ids is overwritten; that is the documented
-// contract, and it is why no other `ocv2-` id is claimed.
+// reload. A user agent that takes one of these exact ids is overwritten; the product documents that
+// reservation, and it is why no other `ocv2-` id is claimed.
 // `created` holds the ids this process registered. Only those can be removed when a definition
 // disappears, because creation here is the one ownership fact the plugin actually observed; ids
 // seen only after a reload are never deleted on inference.

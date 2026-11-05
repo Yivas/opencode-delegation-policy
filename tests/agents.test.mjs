@@ -7,7 +7,10 @@ import {
   applyDefinition,
   registerAgentDefinitions,
 } from "../dist/agents/register.js";
-import { advisorSafetyIssues, allowedActions } from "../dist/agents/safety.js";
+import {
+  actionsNotDenied,
+  advisorSafetyIssues,
+} from "../dist/agents/safety.js";
 
 // Editor double with the transform-input surface: agents are plain objects, updates mutate in place
 // and an absent id is created, exactly as the host editor does.
@@ -432,7 +435,7 @@ test("an allow the host config appends after the deny list is reported for that 
   });
 
   assert.deepEqual(issues, [
-    { kind: "actions-allowed", id: "ocv2-advisor-1", actions: ["shell"] },
+    { kind: "actions-not-denied", id: "ocv2-advisor-1", actions: ["shell"] },
   ]);
 });
 
@@ -453,11 +456,31 @@ test("a narrower allow still counts as a hole, and ask is not treated as safe", 
 
   assert.deepEqual(issues, [
     {
-      kind: "actions-allowed",
+      kind: "actions-not-denied",
       id: "ocv2-advisor-2",
       actions: ["edit", "read"],
     },
   ]);
+});
+
+test("a scoped deny does not close the action for the rest of its resources", () => {
+  // Replacing the plugin's rules with a narrow deny is exactly the config case this check exists
+  // for: `read` on `*.env` is denied, but every other read is not.
+  const issues = advisorSafetyIssues({
+    definitions: [advisorDefinition("ocv2-advisor-1")],
+    effective: [
+      {
+        id: "ocv2-advisor-1",
+        permissions: [{ action: "read", resource: "*.env", effect: "deny" }],
+      },
+    ],
+  });
+
+  assert.equal(issues.length, 1);
+  const [issue] = issues;
+  assert.equal(issue.kind, "actions-not-denied");
+  assert.ok(issue.actions.includes("read"));
+  assert.ok(issue.actions.includes("*"));
 });
 
 test("an advisor that is missing from the effective catalog is reported", () => {
@@ -471,17 +494,44 @@ test("an advisor that is missing from the effective catalog is reported", () => 
 
 test("rules are matched by action with the wildcard, last match winning", () => {
   assert.deepEqual(
-    allowedActions([
+    actionsNotDenied([
       { action: "*", resource: "*", effect: "deny" },
       { action: "*", resource: "*", effect: "allow" },
     ]).includes("shell"),
     true,
   );
   assert.deepEqual(
-    allowedActions([
+    actionsNotDenied([
       { action: "*", resource: "*", effect: "allow" },
       { action: "*", resource: "*", effect: "deny" },
     ]),
     [],
   );
+});
+
+test("an empty rule list leaves every action unclosed", () => {
+  const actions = actionsNotDenied([]);
+
+  assert.ok(actions.includes("read"));
+  assert.ok(actions.includes("*"));
+});
+
+test("a role with an inline variant but no thinking policy registers without the variant", () => {
+  // The variant exists in the catalogue, but its level is unproven, so it is not launched; the same
+  // rule that keeps an unproven advisor default out of a launch.
+  const definitions = agentDefinitions({
+    roles: [
+      {
+        role: "small",
+        model: { providerID: "acme", id: "small-model", variant: "deep" },
+        thinking: { kind: "unset" },
+      },
+    ],
+    advisors: [],
+  });
+
+  assert.deepEqual(definitions[0]?.model, {
+    providerID: "acme",
+    id: "small-model",
+  });
 });
