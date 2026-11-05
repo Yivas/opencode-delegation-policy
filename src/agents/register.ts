@@ -78,9 +78,9 @@ export type RegisterAgentResult = {
   readonly removed: readonly string[];
 };
 
-// Permission rules and description do not teach behaviour: the system prompt carries the only
-// instruction the child sees. The delegation policy is injected where the main agent reads it, not
-// into these children.
+// Permission rules and description do not teach behaviour, so each agent carries the only instruction
+// its child reads here. These texts are not the delegation policy: the policy belongs to the main
+// agent's request, and injecting it is not connected yet.
 const ROLE_SYSTEM =
   "Work only on the delegated task within its stated scope. Report results and limitations; do not take on work outside it.";
 const ADVISOR_SYSTEM =
@@ -133,10 +133,6 @@ function selectionModel(selection: RoleSelection): AgentModel {
     ? { providerID: model.providerID, id: model.id }
     : { providerID: model.providerID, id: model.id, variant: chosen };
 }
-
-// Advisors are numbered in configuration order, so two entries with the same model still get their
-// own stable id instead of colliding. The id shape lives in `ids.ts`, shared with the check that
-// recognises an advisor.
 
 // Every field the plugin owns is set explicitly, so re-registering is idempotent and an agent left
 // by an earlier configuration cannot keep an old model. Permissions are the exception: an ordinary

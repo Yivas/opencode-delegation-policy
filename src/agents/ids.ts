@@ -28,6 +28,9 @@ export type AgentPermission = {
   readonly effect: "allow" | "deny" | "ask";
 };
 
+// Advisors are numbered by their position in the configured list, so two entries with the same model
+// still get distinct ids. `isAdvisorAgentID` reads the same shape, so an id cannot be built one way
+// and recognised another.
 export function advisorAgentID(advisor: number): string {
   return `${ADVISOR_PREFIX}${advisor}`;
 }
