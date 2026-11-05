@@ -138,11 +138,19 @@ test("turning delegation off removes the block on the next request and touches n
   await store.applySession("root", { intensity: "off" });
   await injector.apply({ sessionID: "root", agent: "build", system });
 
-  assert.deepEqual(system, [OTHER]);
+  // The policy is gone; the only addition left is the one-turn notice that it was turned off.
+  assert.deepEqual(system[0], OTHER);
+  assert.equal(system.length, 2);
+  assert.match(system[1].text, /Delegation and Advisor disabled/);
   assert.deepEqual(injector.last(), {
     outcome: "skipped",
     reason: "nothing-active",
   });
+
+  // After that turn succeeds, nothing of the plugin's is left at all.
+  injector.turnSucceeded("root");
+  await injector.apply({ sessionID: "root", agent: "build", system });
+  assert.deepEqual(system, [OTHER]);
 });
 
 test("a failure leaves no block, never a stale one, and says which failure it was", async () => {

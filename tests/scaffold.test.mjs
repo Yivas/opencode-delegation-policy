@@ -46,6 +46,8 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
     effectiveAgents: [],
     rpcs: [],
     hooks: [],
+    events: [],
+    subscriptions: 0,
   };
 
   const model = {
@@ -142,6 +144,25 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
       };
     },
   };
+  // Event stream double: events pushed by the test are delivered until the plugin aborts.
+  const event = {
+    subscribe({ signal }) {
+      state.subscriptions += 1;
+      return {
+        async *[Symbol.asyncIterator]() {
+          while (!signal.aborted) {
+            const next = state.events.shift();
+            if (next !== undefined) {
+              yield next;
+              continue;
+            }
+            // Unref'd, so a test that never cleans up does not keep the process alive.
+            await new Promise((resolve) => setTimeout(resolve, 1).unref());
+          }
+        },
+      };
+    },
+  };
   const session = {
     async hook(name, callback) {
       if (this !== session) throw new Error("session.hook lost its receiver");
@@ -178,6 +199,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
         if (key === "agent") return agent;
         if (key === "rpc") return rpc;
         if (key === "session") return session;
+        if (key === "event") return event;
         throw new Error(`unexpected host domain access: ${String(key)}`);
       },
     },
@@ -393,10 +415,13 @@ test("defaults saved through /delegate reach the main agent after a restart, not
     await handlers.run({ line });
   }
 
-  // The agents were created at start, with delegation off, so there is still nothing to name.
+  // The agents were created at start, with delegation off, so there is still nothing to name. The
+  // change itself is announced, but no policy names an agent that does not exist.
   const unregistered = request();
   await callback(unregistered);
-  assert.equal(unregistered.system.length, 1);
+  assert.equal(unregistered.system.length, 2);
+  assert.match(unregistered.system[1].text, /<delegation_config_notice>/);
+  assert.doesNotMatch(unregistered.system[1].text, /<delegation_policy>/);
   assert.match(
     (await handlers.run({ line: "" })).text,
     /role small: agent-not-registered[\s\S]*restart OpenCode/,
@@ -420,9 +445,24 @@ test("defaults saved through /delegate reach the main agent after a restart, not
     /latest request carried the delegation policy/,
   );
 
-  // A session command from the TUI changes that session only; the next request there follows it.
+  // A session command from the TUI changes that session only; the next request there follows it,
+  // with a notice of what changed after the policy.
   await handlers.run({ line: "orchestrator", sessionID: "root" });
   const session = request();
   await callback(session);
   assert.match(session.system[1].text, /Intensity: orchestrator\./);
+  assert.match(
+    session.system[2].text,
+    /Delegation intensity: normal -> orchestrator/,
+  );
+
+  // Once the host reports the turn succeeded, the notice has been read and is not repeated.
+  state.events.push({
+    type: "session.execution.succeeded",
+    data: { sessionID: "root" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const next = request();
+  await callback(next);
+  assert.equal(next.system.length, 2);
 });

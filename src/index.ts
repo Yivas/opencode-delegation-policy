@@ -50,6 +50,9 @@ const delegationPolicy: Plugin.Plugin = {
     };
     let rpcRegistration: { dispose: () => Promise<void> } | undefined;
     let hookRegistration: { dispose: () => Promise<void> } | undefined;
+    // Listens for turns that finished successfully, which consume a configuration notice. It only
+    // reads the host's public event stream and stops with the plugin.
+    const events = new AbortController();
 
     // Each registration is retired on its own: one that refuses must not leave the others alive. A
     // handle that was retired is forgotten, so a retry does not dispose it twice. The first failure
@@ -63,6 +66,7 @@ const delegationPolicy: Plugin.Plugin = {
           failures.push(error);
         }
       };
+      events.abort();
       const hook = hookRegistration;
       if (hook !== undefined) {
         await attempt(async () => {
@@ -108,6 +112,18 @@ const delegationPolicy: Plugin.Plugin = {
       hookRegistration = await context.session.hook("context", (request) =>
         injector.apply(request),
       );
+      void (async () => {
+        for await (const event of context.event.subscribe({
+          signal: events.signal,
+        })) {
+          if (event.type === "session.execution.succeeded") {
+            injector.turnSucceeded(event.data.sessionID);
+          }
+        }
+      })().catch(() => {
+        // A stream that ends or fails only means notices stay until the next successful turn is
+        // seen; it must never take the plugin down.
+      });
     } catch (error) {
       // Registration may retain a handle after another setup step fails; retire all before failing.
       // A retirement that fails is the error reported, as it was before the RPC existed: it means

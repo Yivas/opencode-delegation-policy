@@ -6,6 +6,13 @@ import {
   type ModelCatalog,
   validatePreferenceAxes,
 } from "../validation/models.js";
+import {
+  createNoticeTracker,
+  NOTICE_MARKER,
+  NOTICE_METADATA_KEY,
+  type NoticeTracker,
+  projectNotice,
+} from "./notice.js";
 import { restrictToRegistered } from "./registered.js";
 import { OWNED_MARKER, renderDelegationPolicy } from "./render.js";
 
@@ -14,8 +21,9 @@ import { OWNED_MARKER, renderDelegationPolicy } from "./render.js";
 //
 // Where it runs, decided with the Advisors on 2026-11-05: the `context` hook only. Compaction is left
 // alone because a summary model should not follow delegation rules and the next turn carries the
-// block again; `generate` waits until the host shows it is a user-turn path. Child sessions never get
-// the block: a delegated child must not delegate or consult.
+// block again. `generate` is not a user turn: the host docs say it runs for transient
+// `ctx.session.generate` calls. Child sessions never get the block: a delegated child must not
+// delegate or consult.
 
 export const POLICY_METADATA_KEY = "opencode-delegation-policy";
 
@@ -27,6 +35,8 @@ type SystemPart = {
 
 const BLOCK_OPENING = `<delegation_policy>\n${OWNED_MARKER}\n`;
 const BLOCK_CLOSING = "</delegation_policy>";
+const NOTICE_OPENING = `<delegation_config_notice>\n${NOTICE_MARKER}\n`;
+const NOTICE_CLOSING = "</delegation_config_notice>";
 
 // Ownership is the metadata this plugin writes. A part without it (a host that drops part metadata)
 // counts only when it is a whole block of ours, from the opening tag and marker to the closing tag:
@@ -36,26 +46,30 @@ function isOwned(part: {
   readonly metadata?: unknown;
 }) {
   const metadata = part.metadata;
-  if (
-    typeof metadata === "object" &&
-    metadata !== null &&
-    (metadata as Record<string, unknown>)[POLICY_METADATA_KEY] === true
-  ) {
-    return true;
+  if (typeof metadata === "object" && metadata !== null) {
+    const record = metadata as Record<string, unknown>;
+    if (
+      record[POLICY_METADATA_KEY] === true ||
+      record[NOTICE_METADATA_KEY] === true
+    ) {
+      return true;
+    }
   }
+  if (typeof part.text !== "string") return false;
   return (
-    typeof part.text === "string" &&
-    part.text.startsWith(BLOCK_OPENING) &&
-    part.text.endsWith(BLOCK_CLOSING)
+    (part.text.startsWith(BLOCK_OPENING) &&
+      part.text.endsWith(BLOCK_CLOSING)) ||
+    (part.text.startsWith(NOTICE_OPENING) && part.text.endsWith(NOTICE_CLOSING))
   );
 }
 
-// Removes every block this plugin added before and appends the current one, if any. Running it twice
-// on the same parts leaves exactly one block. Appending keeps the parts before it, which other
-// instructions and the provider's prompt cache depend on, exactly as they were.
+// Removes every part this plugin added before and appends the current block and notice, if any.
+// Running it twice on the same parts leaves exactly one of each. Appending keeps the parts before
+// it, which other instructions and the provider's prompt cache depend on, exactly as they were.
 export function replacePolicyBlock(
   system: SystemPart[],
   block: string | undefined,
+  notice?: string,
 ): void {
   for (let index = system.length - 1; index >= 0; index -= 1) {
     const part = system[index];
@@ -66,6 +80,13 @@ export function replacePolicyBlock(
       type: "text",
       text: block,
       metadata: { [POLICY_METADATA_KEY]: true },
+    });
+  }
+  if (notice !== undefined) {
+    system.push({
+      type: "text",
+      text: notice,
+      metadata: { [NOTICE_METADATA_KEY]: true },
     });
   }
 }
@@ -110,6 +131,8 @@ export type PolicyInjector = {
     system: SystemPart[];
   }): Promise<void>;
   last(): InjectionReport;
+  // The session's turn finished successfully, so the notice it carried has been read.
+  turnSucceeded(sessionID: string): void;
 };
 
 // Sessions whose parent is remembered. Past it the oldest is forgotten and simply looked up again,
@@ -120,6 +143,7 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
   // A session's parent is assumed fixed once it exists (not verified against the host), so a lookup
   // is reused until it is evicted.
   const roots = new Map<string, boolean>();
+  const notices: NoticeTracker = createNoticeTracker();
   let report: InjectionReport = { outcome: "none-yet" };
 
   async function isRoot(sessionID: string): Promise<boolean> {
@@ -168,9 +192,16 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
       }
 
       let block: string | undefined;
+      let notice: string | undefined;
       try {
         const { preferences } = await ports.store.readSession(
           request.sessionID,
+        );
+        // The notice follows the configuration, not the block: turning both axes off still says so
+        // once, on a request that then carries no policy.
+        notice = notices.forRequest(
+          request.sessionID,
+          projectNotice(preferences),
         );
         const validation = restrictToRegistered(
           await validatePreferenceAxes({
@@ -192,12 +223,13 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
         return;
       }
 
-      replacePolicyBlock(request.system, block);
+      replacePolicyBlock(request.system, block, notice);
       report =
         block === undefined
           ? { outcome: "skipped", reason: "nothing-active" }
           : { outcome: "injected" };
     },
     last: () => report,
+    turnSucceeded: (sessionID) => notices.succeeded(sessionID),
   };
 }
