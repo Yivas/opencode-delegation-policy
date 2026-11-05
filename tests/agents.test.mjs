@@ -7,6 +7,7 @@ import {
   applyDefinition,
   registerAgentDefinitions,
 } from "../dist/agents/register.js";
+import { advisorSafetyIssues, allowedActions } from "../dist/agents/safety.js";
 
 // Editor double with the transform-input surface: agents are plain objects, updates mutate in place
 // and an absent id is created, exactly as the host editor does.
@@ -380,4 +381,107 @@ test("applying an advisor definition replaces any existing rules with the deny l
     model: { providerID: "acme", id: "model", variant: "deep" },
     permissions: [{ action: "*", resource: "*", effect: "deny" }],
   });
+});
+
+function advisorDefinition(id) {
+  return {
+    id,
+    name: "Advisor",
+    description: "Advice only.",
+    system: "Advise.",
+    mode: "subagent",
+    model: { providerID: "acme", id: "model" },
+    permissions: [
+      { action: "read", resource: "*", effect: "deny" },
+      { action: "*", resource: "*", effect: "deny" },
+    ],
+  };
+}
+
+test("an advisor whose rules still deny everything raises no issue", () => {
+  const issues = advisorSafetyIssues({
+    definitions: [advisorDefinition("ocv2-advisor-1")],
+    effective: [
+      {
+        id: "ocv2-advisor-1",
+        permissions: [
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "read", resource: "*", effect: "deny" },
+          { action: "*", resource: "*", effect: "deny" },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(issues, []);
+});
+
+test("an allow the host config appends after the deny list is reported for that action", () => {
+  // This is the documented order: config runs after the transform and the last matching rule wins.
+  const issues = advisorSafetyIssues({
+    definitions: [advisorDefinition("ocv2-advisor-1")],
+    effective: [
+      {
+        id: "ocv2-advisor-1",
+        permissions: [
+          { action: "*", resource: "*", effect: "deny" },
+          { action: "shell", resource: "*", effect: "allow" },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(issues, [
+    { kind: "actions-allowed", id: "ocv2-advisor-1", actions: ["shell"] },
+  ]);
+});
+
+test("a narrower allow still counts as a hole, and ask is not treated as safe", () => {
+  const issues = advisorSafetyIssues({
+    definitions: [advisorDefinition("ocv2-advisor-2")],
+    effective: [
+      {
+        id: "ocv2-advisor-2",
+        permissions: [
+          { action: "*", resource: "*", effect: "deny" },
+          { action: "read", resource: "src/**", effect: "allow" },
+          { action: "edit", resource: "*", effect: "ask" },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(issues, [
+    {
+      kind: "actions-allowed",
+      id: "ocv2-advisor-2",
+      actions: ["edit", "read"],
+    },
+  ]);
+});
+
+test("an advisor that is missing from the effective catalog is reported", () => {
+  const issues = advisorSafetyIssues({
+    definitions: [advisorDefinition("ocv2-advisor-1")],
+    effective: [],
+  });
+
+  assert.deepEqual(issues, [{ kind: "unregistered", id: "ocv2-advisor-1" }]);
+});
+
+test("rules are matched by action with the wildcard, last match winning", () => {
+  assert.deepEqual(
+    allowedActions([
+      { action: "*", resource: "*", effect: "deny" },
+      { action: "*", resource: "*", effect: "allow" },
+    ]).includes("shell"),
+    true,
+  );
+  assert.deepEqual(
+    allowedActions([
+      { action: "*", resource: "*", effect: "allow" },
+      { action: "*", resource: "*", effect: "deny" },
+    ]),
+    [],
+  );
 });
