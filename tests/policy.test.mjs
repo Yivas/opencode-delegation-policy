@@ -222,11 +222,11 @@ test("a fixed or range policy offers only the variants it admits, never the bare
   );
 });
 
-test("a role without a policy may run bare or with any proven variant", () => {
+test("a role without a policy chooses a named variant per run and never the ambient default", () => {
   const text = render(
     preferences(),
     active("normal", [
-      role("small", "small", { variants: [option("deep")] }),
+      role("small", "small", { variants: [option("deep"), option("low")] }),
       role("medium", "medium"),
     ]),
   );
@@ -234,7 +234,7 @@ test("a role without a policy may run bare or with any proven variant", () => {
 
   assert.match(
     lines.find((line) => line.startsWith("- Small:")),
-    /Allowed model strings: "acme\/small", "acme\/small#deep"\./,
+    /Allowed model strings: "acme\/small#deep", "acme\/small#low"\./,
   );
   // A model whose reasoning cannot be named still runs, and the line says not to add a variant.
   assert.match(
@@ -271,8 +271,78 @@ test("several Advisors are consulted together, and an unproven default is not la
   assert.doesNotMatch(first, /#odd/);
   assert.match(
     lines.find((line) => line.startsWith("- Advisor 2")),
-    /Allowed model strings: "acme\/b", "acme\/b#high"\./,
+    /Allowed model strings: "acme\/b#high"\./,
   );
+});
+
+test("a partial Advisor list keeps each Advisor's own number", () => {
+  const text = render(
+    preferences({
+      advisorMode: "on",
+      advisors: { kind: "configured", models: ["acme/gone", "acme/b"] },
+    }),
+    active("normal", TWO_ROLES),
+    {
+      status: "partial",
+      advisors: [advisor(2, "b")],
+      issues: [{ field: "model", code: "model-not-found", advisor: 1 }],
+      warnings: [],
+    },
+  );
+
+  assert.match(text, /- Advisor 2 \(optional\): agent "ocv2-advisor-2"/);
+  assert.doesNotMatch(text, /ocv2-advisor-1/);
+});
+
+test("a range policy lists only the variants it admits and says the bounds", () => {
+  const text = render(
+    preferences({
+      thinking: {
+        ...preferences().thinking,
+        small: { kind: "range", from: "low", to: "high" },
+      },
+    }),
+    active("normal", [
+      role("small", "small", {
+        thinking: { kind: "options", options: [option("low"), option("deep")] },
+        variants: undefined,
+      }),
+      role("medium", "medium"),
+    ]),
+  );
+
+  const smallLine = text
+    .split("\n")
+    .find((line) => line.startsWith("- Small:"));
+  assert.match(smallLine, /range low\.\.high inclusive/);
+  assert.match(
+    smallLine,
+    /Allowed model strings: "acme\/small#low", "acme\/small#deep"\./,
+  );
+});
+
+test("a written variant is launched when proven and dropped with a note when not", () => {
+  const proven = role("small", "small", {
+    model: { providerID: "acme", id: "small", variant: "deep" },
+    thinking: { kind: "inline", variant: "deep", ...option("deep") },
+    variants: undefined,
+  });
+  const skipped = role("medium", "medium", {
+    model: { providerID: "acme", id: "medium", variant: "odd" },
+    variantSkipped: true,
+  });
+  const lines = render(
+    preferences(),
+    active("normal", [proven, skipped]),
+  ).split("\n");
+
+  assert.match(
+    lines.find((line) => line.startsWith("- Small:")),
+    /fixed by the configured variant.*Allowed model strings: "acme\/small#deep"\./,
+  );
+  const medium = lines.find((line) => line.startsWith("- Medium:"));
+  assert.match(medium, /cannot be verified and is not used/);
+  assert.doesNotMatch(medium, /#odd/);
 });
 
 test("nothing from Pi's own machinery leaks into the OpenCode text", () => {

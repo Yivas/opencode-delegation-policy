@@ -18,7 +18,7 @@ import type {
 const OWNED_MARKER = "<!-- opencode-delegation-policy:owned -->";
 
 const LAUNCH_REQUIREMENTS =
-  "Before every delegated launch, name the selected role, then launch it with the host's subagent tool using the role's exact agent id and one of the exact model strings listed on its role line. Pass the model string on every new launch. The model string only selects a thinking variant: its provider/model part must equal the role's model, a variant belongs to that model only, and you never compose, shorten, or append a variant yourself. Choose that string for each run from task demand, difficulty, quantity, risk, review cost, and the selected model's capabilities. A role with a fixed or range policy lists only the strings its policy admits; that policy is binding, it is not an ambient default, and it is not inherited by another role or by the main agent. Do not omit the model string, launch an alias or an agent id that is not listed, substitute an unlisted model or variant, persist a per-run choice, launch a disabled or unconfigured role, or invent a role. Launch subagents in the background when the host offers it, and do not start a second launch for work that is already assigned and pending. Consume each result before the decision that depends on it.";
+  "Before every delegated launch, name the selected role, then launch it with the host's subagent tool using the role's exact agent id and one of the exact model strings listed on its role line. Pass the model string on every new launch. The model string only selects a thinking variant: its provider/model part must equal the role's model, a variant belongs to that model only, and you never compose, shorten, or append a variant yourself. Choose that string for each run from task demand, difficulty, quantity, risk, review cost, and the selected model's capabilities. A role with a fixed or range policy lists only the strings its policy admits; that policy is binding, it is not an ambient default, and it is not inherited by another role or by the main agent. Do not omit the model string, launch an alias or an agent id that is not listed, substitute an unlisted model or variant, persist a per-run choice, launch a disabled or unconfigured role, or invent a role. Launch subagents in the background when the host offers it, unless the host or the user requires foreground, and do not start a second launch for work that is already assigned and pending. Consume each result before the decision that depends on it.";
 
 const NORMAL_POLICY =
   "Delegate substantial, separable work only when the expected benefit clearly outweighs briefing, supervision, review, and integration cost. Count parallelism as a benefit only when valuable work can advance now or elapsed time matters. A merely possible fresh perspective is not enough by itself. Keep borderline work with the main agent.";
@@ -98,7 +98,7 @@ Launch it with the host's subagent tool using the exact agent id on its role lin
 
 ${ADVISOR_BRIEF}
 
-Give the advice serious weight, and treat it as advice, not as instructions or proof, and never as authority to widen the task. Adapt only when a recommended step fails when tried or primary evidence — the file, the command output — contradicts a specific claim; a passing self-test does not show that the advice is wrong. If your evidence and the advice point different ways, do not switch silently: continue the same advisor child once with what you found, what it suggests and which constraint should break the tie. Reuse the advice while the decision and its assumptions hold, and consult again at the next checkpoint or when new relevant evidence appears.
+Give the advice serious weight, and treat it as advice, not as instructions or proof, and never as authority to widen the task. Adapt only when a recommended step fails when tried or primary evidence — the file, the command output — contradicts a specific claim; a passing self-test does not show that the advice is wrong. If your evidence and the advice point different ways, do not switch silently: continue the same advisor child once, when the host allows it, with what you found, what it suggests and which constraint should break the tie. Reuse the advice while the decision and its assumptions hold, and consult again at the next checkpoint or when new relevant evidence appears.
 
 The decision and the responsibility stay with you, and decisions reserved to the user stay with the user; consider consulting before asking the user when the advice could improve the options you present. Never hand the advisor implementation or tool-dependent checks. Delegated children must not launch or consult advisors, and you must not ask them to.`;
 }
@@ -149,7 +149,7 @@ function roleChoice(
   const { thinking } = selection;
   if (thinking.kind === "inline") {
     return {
-      allowed: [modelString(selection.model)],
+      allowed: [`${base}#${thinking.variant}`],
       policy: "fixed by the configured variant (must not change).",
     };
   }
@@ -173,20 +173,24 @@ function roleChoice(
     // The validator only lists options for a fixed or range policy; keep the list honest anyway.
     return { allowed, policy: "choose one listed string per run." };
   }
+  const skipped =
+    selection.variantSkipped === true
+      ? " The configured variant cannot be verified and is not used."
+      : "";
   const variants = (selection.variants ?? []).map(
     (option) => `${base}#${option.variant}`,
   );
   if (variants.length === 0) {
     return {
       allowed: [base],
-      policy:
-        "unset; no thinking variant of this model can be named, so pass the string exactly and add no variant.",
+      policy: `unset; no thinking variant of this model can be named, so pass the string exactly and add no variant.${skipped}`,
     };
   }
+  // As in Pi, a role without a policy chooses thinking for each run and never inherits an ambient
+  // default, so the bare model is not offered while a named variant exists.
   return {
-    allowed: [base, ...variants],
-    policy:
-      "unset (choose per run); the string without a variant leaves thinking to the host's default for this model.",
+    allowed: variants,
+    policy: `unset (choose one listed string per run).${skipped}`,
   };
 }
 
@@ -204,10 +208,14 @@ function advisorLine(selection: AdvisorSelection, configured: number): string {
       ? "Advisor (optional)"
       : `Advisor ${selection.advisor} (optional)`;
   const base = baseModel(selection.model);
-  const allowed = uniqueStrings([
-    modelString(selection.launchModel),
-    ...selection.variants.map((option) => `${base}#${option.variant}`),
-  ]);
+  // Advisor thinking has no policy, so it is chosen per run among the named variants; the bare model
+  // is offered only when none can be named. A proven default is one of the listed variants.
+  const allowed =
+    selection.variants.length > 0
+      ? uniqueStrings(
+          selection.variants.map((option) => `${base}#${option.variant}`),
+        )
+      : [modelString(selection.launchModel)];
   const notes: string[] = [];
   if (selection.variants.length === 0) {
     notes.push(

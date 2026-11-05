@@ -37,6 +37,8 @@ export type RoleSelection = {
   readonly model: ModelReference;
   readonly thinking: ThinkingSelection;
   readonly variants?: readonly ThinkingOption[];
+  // A `#variant` the user wrote whose level the tables cannot name: kept in `model`, never launched.
+  readonly variantSkipped?: true;
 };
 
 export type ValidationCode =
@@ -357,11 +359,29 @@ async function resolveConfiguredRole(
     return failed(subject, "thinking", selected.code);
   }
 
-  // Without a policy the main agent chooses thinking per run, as in Pi. It can only choose among
-  // variants the tables can name, so those are listed the same way as for an Advisor. A model whose
-  // reasoning cannot be named simply lists none: the role stays usable. A variant the user wrote in
-  // the reference is their choice, so nothing else is offered next to it.
-  if (selected.selection.kind === "unset" && inlineVariant === undefined) {
+  if (selected.selection.kind === "unset") {
+    // A variant the user wrote with no policy is their choice and is kept when the tables can name
+    // its level, exactly like an Advisor default. One they cannot name stays in the configuration but
+    // is never launched, because the plugin must not select reasoning it cannot verify.
+    if (inlineVariant !== undefined) {
+      const proven = selectThinkingVariant(
+        model,
+        ANY_THINKING_LEVEL,
+        inlineVariant,
+      );
+      if (proven.ok && proven.selection.kind === "inline") {
+        return {
+          ok: true,
+          value: {
+            role,
+            model: resolved.value.reference,
+            thinking: proven.selection,
+          },
+        };
+      }
+    }
+    // Otherwise the main agent chooses thinking per run, as in Pi, among the variants the tables can
+    // name. A model whose reasoning cannot be named lists none and stays usable.
     const listed = selectThinkingVariant(model, ANY_THINKING_LEVEL, undefined);
     const variants =
       listed.ok && listed.selection.kind === "options"
@@ -374,6 +394,9 @@ async function resolveConfiguredRole(
         model: resolved.value.reference,
         thinking: selected.selection,
         variants,
+        ...(inlineVariant === undefined
+          ? {}
+          : { variantSkipped: true as const }),
       },
     };
   }

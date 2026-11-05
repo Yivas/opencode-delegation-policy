@@ -524,6 +524,9 @@ test("model references keep the exact base identifier with internal slashes and 
       role: "small",
       model: { providerID: "acme", id: "vendor/model/v2", variant: "fast" },
       thinking: { kind: "unset" },
+      // The catalogue model has no variants the tables can name.
+      variants: [],
+      variantSkipped: true,
     },
   ]);
 });
@@ -656,7 +659,34 @@ test("a disabled model, an unknown inline variant and duplicate catalogue entrie
   }
 });
 
-test("unset thinking keeps an inline variant exactly as written, even a budget-only one", async () => {
+test("unset thinking keeps a provable inline variant as the role's fixed choice", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: { small: configured("openai/small-model#deep") },
+  });
+  const catalog = catalogDouble([
+    openAIResponsesModel("small-model", [
+      effortVariant("deep", "high"),
+      effortVariant("low", "low"),
+    ]),
+  ]);
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  const [role] = result.delegation.roles;
+  assert.equal(role.thinking.kind, "inline");
+  assert.equal(role.thinking.variant, "deep");
+  assert.equal(role.variantSkipped, undefined);
+});
+
+test("unset thinking keeps an unprovable inline variant as written but never launches it", async () => {
   const double = createStorageDouble();
   const store = new PreferenceStore(double.storage);
   await store.saveDefaults({
@@ -683,6 +713,8 @@ test("unset thinking keeps an inline variant exactly as written, even a budget-o
       role: "small",
       model: { providerID: "acme", id: "large-model", variant: "budget" },
       thinking: { kind: "unset" },
+      variants: [],
+      variantSkipped: true,
     },
   ]);
 });
@@ -2508,6 +2540,8 @@ test("unset keeps an unproven Bedrock variant opaque with its exact ModelRef, in
         variant: "bedrock-low",
       },
       thinking: { kind: "unset" },
+      variants: [],
+      variantSkipped: true,
     },
   ]);
 });

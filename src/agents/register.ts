@@ -113,8 +113,9 @@ export function agentDefinitions(input: {
 // The registered agent carries a variant only when the configuration leaves one unambiguous choice.
 // A rule with several proven options is a per-launch decision, so the agent keeps the base model and
 // the policy tells the main agent which variant to pass. A `#variant` written on a role whose
-// thinking policy is unset is not proven either, so it is not registered: the same rule that keeps
-// an unproven advisor default out of a launch. The policy text is what states both cases.
+// thinking policy is unset is registered only when the tables can name its level (the validator
+// then reports it as inline); one they cannot name is kept out, the same rule that keeps an unproven
+// advisor default out of a launch. The policy text is what states both cases.
 function selectionModel(selection: RoleSelection): AgentModel {
   const { model, thinking } = selection;
   const chosen =
