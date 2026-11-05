@@ -29,10 +29,14 @@ export type ModelReference = {
   readonly variant?: string;
 };
 
+// `variants` exists only when the role has no thinking policy: the proven variants the main agent may
+// choose from per run, empty when none can be named. With a policy, `thinking` already says what is
+// allowed.
 export type RoleSelection = {
   readonly role: RoleKey;
   readonly model: ModelReference;
   readonly thinking: ThinkingSelection;
+  readonly variants?: readonly ThinkingOption[];
 };
 
 export type ValidationCode =
@@ -216,6 +220,12 @@ async function validateDelegation(
   let validOrdinaryRoles = 0;
   for (const role of DELEGATION_ROLES) {
     const setting = preferences.roles[role];
+    // As in Pi, an ordinary role has to be configured or explicitly turned off: a gap could be a role
+    // the user forgot, and the policy would silently plan around it. Visual Design stays optional.
+    if (setting.kind === "unset" && ORDINARY_ROLES.includes(role)) {
+      issues.push({ field: "roles", role, code: "not-configured" });
+      continue;
+    }
     if (setting.kind !== "configured") {
       continue;
     }
@@ -345,6 +355,27 @@ async function resolveConfiguredRole(
   );
   if (!selected.ok) {
     return failed(subject, "thinking", selected.code);
+  }
+
+  // Without a policy the main agent chooses thinking per run, as in Pi. It can only choose among
+  // variants the tables can name, so those are listed the same way as for an Advisor. A model whose
+  // reasoning cannot be named simply lists none: the role stays usable. A variant the user wrote in
+  // the reference is their choice, so nothing else is offered next to it.
+  if (selected.selection.kind === "unset" && inlineVariant === undefined) {
+    const listed = selectThinkingVariant(model, ANY_THINKING_LEVEL, undefined);
+    const variants =
+      listed.ok && listed.selection.kind === "options"
+        ? listed.selection.options
+        : [];
+    return {
+      ok: true,
+      value: {
+        role,
+        model: resolved.value.reference,
+        thinking: selected.selection,
+        variants,
+      },
+    };
   }
 
   return {

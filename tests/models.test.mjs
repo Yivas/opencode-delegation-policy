@@ -11,8 +11,25 @@ const OPENAI = "@opencode/ai/providers/openai";
 
 // Storage double with the ctx.storage surface: values travel as JSON text, so every read is a
 // fresh copy. A failed read rejects with a message that must never reach the caller.
+//
+// It starts from a saved document where every ordinary role is explicitly off, as a user who has
+// decided about each one: an unset ordinary role is a delegation error, and most cases here test one
+// role at a time. Cases about unset roles say so by writing UNSET themselves.
 function createStorageDouble() {
-  const records = new Map();
+  const records = new Map([
+    [
+      GLOBAL_KEY,
+      JSON.stringify({
+        ...STORED_GLOBAL,
+        roles: {
+          small: DISABLED,
+          medium: DISABLED,
+          large: DISABLED,
+          visualDesign: UNSET,
+        },
+      }),
+    ],
+  ]);
   const writes = [];
   let failNextRead = false;
   return {
@@ -350,7 +367,7 @@ test("an active delegation needs at least one valid enabled ordinary role", asyn
     advisorMode: "off",
     roles: {
       small: DISABLED,
-      medium: UNSET,
+      medium: DISABLED,
       large: DISABLED,
       visualDesign: configured("acme/small-model"),
     },
@@ -401,6 +418,8 @@ test("each intensity activates delegation with any single valid ordinary role", 
               role,
               model: { providerID: "acme", id: modelByRole[role].id },
               thinking: { kind: "unset" },
+              // None of these catalogue models has a variant the tables can name.
+              variants: [],
             },
           ],
         },
@@ -666,6 +685,65 @@ test("unset thinking keeps an inline variant exactly as written, even a budget-o
       thinking: { kind: "unset" },
     },
   ]);
+});
+
+// As in Pi, a role without a policy leaves thinking to the main agent per run; it can only choose what
+// the tables can name, so every proven variant is offered and none is chosen.
+test("a role without a thinking policy offers every proven variant for the per-run choice", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: { small: configured("openai/small-model") },
+  });
+  const catalog = catalogDouble([
+    openAIResponsesModel("small-model", [
+      effortVariant("deep", "high"),
+      effortVariant("low", "low"),
+    ]),
+  ]);
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog,
+    sessionID: SESSION_ID,
+  });
+
+  const [role] = result.delegation.roles;
+  assert.deepEqual(role.thinking, { kind: "unset" });
+  assert.deepEqual(
+    role.variants.map((option) => option.variant),
+    ["deep", "low"],
+  );
+  // The agent itself carries no variant: the choice belongs to each launch.
+  assert.equal(role.model.variant, undefined);
+});
+
+test("an unset ordinary role is a delegation error, while an unset Visual Design is not", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveDefaults({
+    intensity: "normal",
+    advisorMode: "off",
+    roles: {
+      small: configured("acme/small-model"),
+      medium: UNSET,
+      large: DISABLED,
+      visualDesign: UNSET,
+    },
+  });
+
+  const result = await validateDelegationAxes({
+    store,
+    catalog: catalogDouble(standardCatalog()),
+    sessionID: SESSION_ID,
+  });
+
+  assert.deepEqual(result.delegation, {
+    status: "error",
+    issues: [{ field: "roles", role: "medium", code: "not-configured" }],
+  });
 });
 
 test("a fixed role with several proven variants returns them all for the launch choice", async () => {

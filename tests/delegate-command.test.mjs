@@ -53,7 +53,14 @@ test("the defaults set from the command are what registration later reads", asyn
   const { storage, store, ports } = setup();
 
   await runDelegate("intensity normal", ports);
-  await runDelegate("role small acme/small-model", ports);
+  const partial = await runDelegate("role small acme/small-model", ports);
+  // Until every ordinary role is decided, the report names the ones still missing.
+  assert.match(
+    partial,
+    /role medium: not-configured; role large: not-configured/,
+  );
+  await runDelegate("role medium off", ports);
+  await runDelegate("role large off", ports);
   const text = await runDelegate("advisors acme/advisor-model", ports);
 
   const { preferences } = await store.readGlobal();

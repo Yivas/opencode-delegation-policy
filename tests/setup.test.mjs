@@ -98,6 +98,8 @@ function deniedAdvisorSlots(numbers) {
 
 function defaults(overrides = {}) {
   const unset = { kind: "unset" };
+  // Every ordinary role must be configured or explicitly off; Visual Design may stay unset.
+  const off = { kind: "disabled" };
   return {
     schemaVersion: 1,
     intensity: "normal",
@@ -105,8 +107,8 @@ function defaults(overrides = {}) {
     advisorMode: "on",
     roles: {
       small: { kind: "configured", model: "acme/small-model" },
-      medium: unset,
-      large: unset,
+      medium: off,
+      large: off,
       visualDesign: unset,
     },
     thinking: {
@@ -424,8 +426,8 @@ test("registering again after a configuration change updates the registered agen
     defaults({
       roles: {
         small: { kind: "configured", model: "acme/other-model" },
-        medium: { kind: "unset" },
-        large: { kind: "unset" },
+        medium: { kind: "disabled" },
+        large: { kind: "disabled" },
         visualDesign: { kind: "unset" },
       },
     }),

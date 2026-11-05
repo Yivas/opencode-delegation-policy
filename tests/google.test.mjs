@@ -665,7 +665,12 @@ async function validateWithRole(catalog, reference, thinking) {
   await store.saveDefaults({
     intensity: "normal",
     advisorMode: "off",
-    roles: { small: { kind: "configured", model: reference } },
+    // The other ordinary roles must be decided; off keeps the case about Small alone.
+    roles: {
+      small: { kind: "configured", model: reference },
+      medium: { kind: "disabled" },
+      large: { kind: "disabled" },
+    },
     thinking: { small: thinking },
   });
   return validateDelegationAxes({
