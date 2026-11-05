@@ -20,8 +20,9 @@ export type TurnWatchPorts = {
   // Sees every event, for the local log. It must not throw.
   readonly observe?: (event: TurnEvent) => void;
   readonly signal: AbortSignal;
-  // Waits between attempts. A port so a test does not wait in real time.
-  readonly wait?: (milliseconds: number) => Promise<void>;
+  // Waits between attempts and must settle early when the signal aborts. A port so a test does not
+  // wait in real time.
+  readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
 };
 
 const ENDINGS: Readonly<Record<string, boolean>> = {
@@ -44,10 +45,19 @@ export function watchTurns(ports: TurnWatchPorts): {
   done: Promise<void>;
 } {
   let state: TurnWatchState = "listening";
+  // Stopping the plugin cancels the pause, so no timer outlives it.
   const wait =
     ports.wait ??
-    ((milliseconds: number) =>
-      new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+    ((milliseconds: number, signal: AbortSignal) =>
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(done, milliseconds);
+        function done() {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          resolve();
+        }
+        signal.addEventListener("abort", done, { once: true });
+      }));
 
   const done = (async () => {
     let pause = FIRST_PAUSE;
@@ -67,7 +77,7 @@ export function watchTurns(ports: TurnWatchPorts): {
       }
       if (ports.signal.aborted) break;
       state = "reconnecting";
-      await wait(pause);
+      await wait(pause, ports.signal).catch(() => undefined);
       pause = Math.min(pause * 2, MAX_PAUSE);
     }
     state = "stopped";

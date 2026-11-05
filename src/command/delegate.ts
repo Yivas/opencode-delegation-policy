@@ -560,7 +560,7 @@ async function describeLog(log: DelegateCommandPorts["log"]): Promise<string> {
     ...entries.map((entry) =>
       entry.kind === "policy"
         ? `${entry.at} policy ${entry.hash}: intensity ${entry.intensity}, advisor ${entry.advisorMode}, preference ${entry.preference}`
-        : `${entry.at} launch ${entry.agent}${entry.model === undefined ? "" : ` ${entry.model}`}${entry.background ? " (background)" : ""}: ${entry.outcome} after ${entry.ms} ms`,
+        : `${entry.at} launch ${entry.agent}${entry.background ? " (background)" : ""}: ${entry.outcome} after ${entry.ms} ms`,
     ),
   ].join("\n");
 }

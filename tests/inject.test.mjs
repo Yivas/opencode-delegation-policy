@@ -134,6 +134,7 @@ test("turning delegation off removes the block on the next request and touches n
   const injector = createPolicyInjector({ store, catalog, ...sessions() });
   const system = [{ ...OTHER }];
   await injector.apply({ sessionID: "root", agent: "build", system });
+  injector.turnEnded("root", true);
 
   await store.applySession("root", { intensity: "off" });
   await injector.apply({ sessionID: "root", agent: "build", system });

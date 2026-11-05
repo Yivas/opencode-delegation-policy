@@ -81,23 +81,21 @@ test("a stream that fails or ends is opened again, with growing pauses", async (
   await watcher.done;
 });
 
-test("the state says when the stream is not being read", async () => {
-  const controller = new AbortController();
-  let release;
-  const watcher = watchTurns({
-    subscribe: scripted([new Error("sync")]),
-    ended: () => {},
-    signal: controller.signal,
-    wait: () =>
-      new Promise((resolve) => {
-        release = resolve;
-      }),
-  });
+test(
+  "aborting during the reconnect pause stops without waiting for the timer",
+  { timeout: 500 },
+  async () => {
+    const controller = new AbortController();
+    const watcher = watchTurns({
+      subscribe: scripted([new Error("sync")]),
+      ended: () => {},
+      signal: controller.signal,
+    });
 
-  await new Promise((resolve) => setTimeout(resolve, 5));
-  assert.equal(watcher.state(), "reconnecting");
-  controller.abort();
-  release();
-  await watcher.done;
-  assert.equal(watcher.state(), "stopped");
-});
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.equal(watcher.state(), "reconnecting");
+    controller.abort();
+    await watcher.done;
+    assert.equal(watcher.state(), "stopped");
+  },
+);

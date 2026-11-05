@@ -142,7 +142,12 @@ export function createNoticeTracker(): NoticeTracker {
       if (known === undefined) {
         // Nothing was told before in this process, so there is nothing to correct yet. A restart loses
         // the baseline: a change made while OpenCode was stopped is not announced.
-        sessions.set(sessionID, { baseline: current });
+        // The first request also opens the first turn, so an edit made during its tools waits for
+        // the next turn like any other.
+        sessions.set(sessionID, {
+          baseline: current,
+          turn: { projection: current, text: undefined, attached: false },
+        });
         if (sessions.size > MAX_SESSIONS) {
           const oldest = sessions.keys().next().value;
           if (oldest !== undefined) sessions.delete(oldest);

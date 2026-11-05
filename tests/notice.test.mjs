@@ -81,6 +81,7 @@ test("the first request of a session sets the baseline without a notice", () => 
 test("a notice repeats within the turn and is consumed only when the turn succeeds", () => {
   const tracker = createNoticeTracker();
   tracker.forRequest("ses", projectNotice(preferences()));
+  tracker.ended("ses", true);
   const changed = projectNotice(preferences({ intensity: "aggressive" }));
 
   const first = tracker.forRequest("ses", changed);
@@ -96,6 +97,7 @@ test("a notice repeats within the turn and is consumed only when the turn succee
 test("a turn that did not succeed leaves the notice for the next one", () => {
   const tracker = createNoticeTracker();
   tracker.forRequest("ses", projectNotice(preferences()));
+  tracker.ended("ses", true);
   const changed = projectNotice(preferences({ intensity: "aggressive" }));
   tracker.forRequest("ses", changed);
 
@@ -108,6 +110,7 @@ test("a change reverted before any turn consumed it says nothing", () => {
   const tracker = createNoticeTracker();
   const original = projectNotice(preferences());
   tracker.forRequest("ses", original);
+  tracker.ended("ses", true);
   tracker.forRequest("ses", projectNotice(preferences({ intensity: "off" })));
   tracker.ended("ses", false);
 
@@ -123,10 +126,21 @@ test("a change reverted before any turn consumed it says nothing", () => {
   );
 });
 
+test("an edit during the very first turn waits for the next turn", () => {
+  const tracker = createNoticeTracker();
+  tracker.forRequest("ses", projectNotice(preferences()));
+  const changed = projectNotice(preferences({ intensity: "aggressive" }));
+  assert.equal(tracker.forRequest("ses", changed), undefined);
+  tracker.ended("ses", true);
+  assert.match(tracker.forRequest("ses", changed), /normal -> aggressive/);
+});
+
 test("sessions keep separate notices", () => {
   const tracker = createNoticeTracker();
   tracker.forRequest("a", projectNotice(preferences()));
   tracker.forRequest("b", projectNotice(preferences()));
+  tracker.ended("a", true);
+  tracker.ended("b", true);
 
   assert.ok(
     tracker.forRequest("a", projectNotice(preferences({ intensity: "off" }))),

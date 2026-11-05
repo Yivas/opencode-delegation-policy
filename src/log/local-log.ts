@@ -1,65 +1,49 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import type { Plugin } from "@opencode/plugin";
 
 import { reservedAgentIDs } from "../agents/ids.js";
 import type { EffectivePreferences } from "../state/effective.js";
+import { ADVISOR_MODES, INTENSITIES, PREFERENCES } from "../state/schema.js";
 
-// Pi 0.21's local log, adapted: what the plugin did, never what anyone said. Each entry is one value
-// in the plugin's own storage under `log/`, so nothing leaves the machine and nothing is appended to
-// a shared file. Entries carry no prompt, brief, answer, conversation, session id, path or host
-// error: only times, the host version, a hash of the policy block when it changes, the modes in
-// force, and, for each launch of one of the plugin's agents, its id, model string, whether it ran in
-// the background, how it ended and how long it took. Writing never blocks or breaks a request; a
-// failed write is dropped. Old entries are removed past a fixed count.
-
+// Content-free observations in the plugin's own storage, never raw tool arguments. In particular,
+// `model` is omitted: even a failed launch can carry arbitrary private text in that argument.
+// Writes are serialized and dropped when the backlog is full. A stalled host cannot grow the queue
+// indefinitely or make a log read wait forever; timeouts stop waiting, not the host's storage call.
 export const LOG_PREFIX = "log/";
 const MAX_ENTRIES = 500;
 const PRUNE_EVERY = 25;
 const MAX_PENDING = 256;
+const MAX_WRITES = 64;
+const READ_TIMEOUT_MS = 1_000;
+const MAX_SCAN_PAGES = 20;
+const RESERVED_IDS = new Set(reservedAgentIDs());
 
-export type LogStorage = {
-  get(key: string): Promise<unknown>;
-  set(key: string, value: never): Promise<void>;
-  remove(key: string): Promise<void>;
-  scan(options: { prefix: string; after?: string; limit?: number }): Promise<{
-    readonly entries: readonly {
-      readonly key: string;
-      readonly value?: unknown;
-    }[];
-    readonly next?: string;
-  }>;
-};
+type LogStorage = Pick<Plugin.Context["storage"], "set" | "remove" | "scan">;
 
-export type LogEntry =
-  | {
-      readonly v: 1;
-      readonly at: string;
-      readonly kind: "policy";
-      readonly host: string;
-      readonly hash: string;
-      readonly intensity: string;
-      readonly advisorMode: string;
-      readonly preference: string;
-    }
-  | {
-      readonly v: 1;
-      readonly at: string;
-      readonly kind: "launch";
-      readonly host: string;
-      readonly agent: string;
-      readonly model?: string;
-      readonly background: boolean;
-      readonly outcome: "completed" | "running" | "failed";
-      readonly ms: number;
-    };
+type Stamp = { readonly v: 2; readonly at: string; readonly host: string };
+export type LogEntry = Stamp &
+  (
+    | {
+        readonly kind: "policy";
+        readonly hash: string;
+        readonly intensity: EffectivePreferences["intensity"];
+        readonly advisorMode: EffectivePreferences["advisorMode"];
+        readonly preference: EffectivePreferences["preference"];
+      }
+    | {
+        readonly kind: "launch";
+        readonly agent: string;
+        readonly background: boolean;
+        readonly outcome: "completed" | "running" | "failed";
+        readonly ms: number;
+      }
+  );
 
 type Event = { readonly type: string; readonly data?: unknown };
-
 export type LocalLog = {
   policy(block: string, preferences: EffectivePreferences): void;
   observe(event: Event): void;
-  // Settles once every queued write has been tried. For tests and orderly shutdown.
   flush(): Promise<void>;
-  // The newest entries, oldest first. Shown by `/delegate log`.
   recent(limit: number): Promise<readonly LogEntry[]>;
 };
 
@@ -69,67 +53,176 @@ function field(data: unknown, name: string): unknown {
     : undefined;
 }
 
+// Stored entries can predate the privacy correction or have been changed by another writer. Rebuild
+// only known fields of v2 entries; legacy v1 entries containing arbitrary model text are never shown.
+function readEntry(value: unknown): LogEntry | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const entry = value as Record<string, unknown>;
+  if (
+    entry.v !== 2 ||
+    typeof entry.at !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(entry.at) ||
+    typeof entry.host !== "string" ||
+    !/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(entry.host)
+  )
+    return undefined;
+  const stamp: Stamp = { v: 2, at: entry.at, host: entry.host };
+  if (
+    entry.kind === "policy" &&
+    typeof entry.hash === "string" &&
+    /^[0-9a-f]{16}$/.test(entry.hash) &&
+    INTENSITIES.includes(
+      entry.intensity as EffectivePreferences["intensity"],
+    ) &&
+    ADVISOR_MODES.includes(
+      entry.advisorMode as EffectivePreferences["advisorMode"],
+    ) &&
+    PREFERENCES.includes(entry.preference as EffectivePreferences["preference"])
+  ) {
+    return {
+      ...stamp,
+      kind: "policy",
+      hash: entry.hash,
+      intensity: entry.intensity as EffectivePreferences["intensity"],
+      advisorMode: entry.advisorMode as EffectivePreferences["advisorMode"],
+      preference: entry.preference as EffectivePreferences["preference"],
+    };
+  }
+  if (
+    entry.kind === "launch" &&
+    typeof entry.agent === "string" &&
+    RESERVED_IDS.has(entry.agent) &&
+    typeof entry.background === "boolean" &&
+    (entry.outcome === "completed" ||
+      entry.outcome === "running" ||
+      entry.outcome === "failed") &&
+    typeof entry.ms === "number" &&
+    Number.isFinite(entry.ms) &&
+    entry.ms >= 0
+  ) {
+    return {
+      ...stamp,
+      kind: "launch",
+      agent: entry.agent,
+      background: entry.background,
+      outcome: entry.outcome,
+      ms: entry.ms,
+    };
+  }
+  return undefined;
+}
+
+function bounded<T>(operation: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("local log read timed out")),
+      READ_TIMEOUT_MS,
+    );
+    operation.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export function createLocalLog(ports: {
   readonly storage: LogStorage;
   readonly hostVersion: string;
   readonly now?: () => number;
 }): LocalLog {
   const now = ports.now ?? (() => Date.now());
-  const reserved = new Set(reservedAgentIDs());
   let tail: Promise<void> = Promise.resolve();
-  let sequence = 0;
+  let backlog = 0;
   let writes = 0;
   let lastHash: string | undefined;
-  // Tool calls named `subagent`, by call id, until their input arrives.
+  let lastTime = 0;
   const named = new Set<string>();
-  // Launches of the plugin's agents, by call id, until they end.
   const pending = new Map<
     string,
-    { agent: string; model?: string; background: boolean; started: number }
+    { agent: string; background: boolean; started: number }
   >();
 
-  const remember = <T>(map: Map<string, T> | Set<string>, key: string) => {
+  const remember = <T>(map: Map<string, T> | Set<string>) => {
     if (map.size <= MAX_PENDING) return;
     const oldest = map.keys().next().value;
-    if (oldest !== undefined && oldest !== key) map.delete(oldest);
+    if (oldest !== undefined) map.delete(oldest);
   };
 
-  const prune = async () => {
-    const keys: string[] = [];
+  async function scan() {
+    const found: { key: string; value: unknown }[] = [];
     let after: string | undefined;
-    do {
+    for (let pageNumber = 0; pageNumber < MAX_SCAN_PAGES; pageNumber += 1) {
       const page = await ports.storage.scan({
         prefix: LOG_PREFIX,
         limit: 200,
         ...(after === undefined ? {} : { after }),
       });
-      for (const entry of page.entries) keys.push(entry.key);
+      for (const entry of page.entries) {
+        if (entry.key.startsWith(LOG_PREFIX)) found.push(entry);
+      }
+      if (page.next === undefined)
+        return {
+          entries: found.sort((a, b) => a.key.localeCompare(b.key)),
+          complete: true,
+        };
+      if (page.next === after)
+        throw new Error("local log scan did not advance");
       after = page.next;
-    } while (after !== undefined);
-    keys.sort();
-    for (const key of keys.slice(0, Math.max(0, keys.length - MAX_ENTRIES))) {
-      await ports.storage.remove(key);
+    }
+    return {
+      entries: found.sort((a, b) => a.key.localeCompare(b.key)),
+      complete: false,
+    };
+  }
+
+  const prune = async () => {
+    // A bounded partial scan must still retire invalid and excess records. Otherwise an oversized
+    // namespace would prevent every later cleanup from making progress.
+    const { entries } = await scan();
+    // Legacy records may contain private model text. Retire them rather than displaying or migrating
+    // them. Only this plugin's log namespace is touched, never settings or another plugin's keys.
+    const valid = [];
+    for (const entry of entries) {
+      if (readEntry(entry.value) === undefined)
+        await ports.storage.remove(entry.key);
+      else valid.push(entry);
+    }
+    for (const entry of valid.slice(
+      0,
+      Math.max(0, valid.length - MAX_ENTRIES),
+    )) {
+      await ports.storage.remove(entry.key);
     }
   };
 
   const write = (entry: LogEntry) => {
-    const at = now();
-    sequence = (sequence + 1) % 1_000_000;
-    // Keys sort by time, then by order within the same millisecond.
-    const key = `${LOG_PREFIX}${String(at).padStart(15, "0")}-${String(sequence).padStart(6, "0")}`;
-    tail = tail
-      .then(async () => {
-        await ports.storage.set(key, entry as never);
+    if (backlog >= MAX_WRITES) return;
+    backlog += 1;
+    // UUID avoids collisions between plugin instances or restarts in the same millisecond; the
+    // monotonic local timestamp keeps this writer's order even if the wall clock moves backwards.
+    lastTime = Math.max(lastTime + 1, now());
+    const key = `${LOG_PREFIX}${String(lastTime).padStart(15, "0")}-${randomUUID()}`;
+    tail = tail.then(async () => {
+      try {
+        await ports.storage.set(key, entry);
         writes += 1;
-        if (writes % PRUNE_EVERY === 0) await prune();
-      })
-      .catch(() => {
-        // A log that cannot be written is not worth a broken request; the entry is dropped.
-      });
+        if (writes === 1 || writes % PRUNE_EVERY === 0) await prune();
+      } catch {
+        // Logging failure is isolated from the model request; a full queue drops later entries.
+      } finally {
+        backlog -= 1;
+      }
+    });
   };
 
-  const stamp = () => ({
-    v: 1 as const,
+  const stamp = (): Stamp => ({
+    v: 2,
     at: new Date(now()).toISOString(),
     host: ports.hostVersion,
   });
@@ -151,31 +244,27 @@ export function createLocalLog(ports: {
         preference: preferences.preference,
       });
     },
-
     observe(event) {
       const id = field(event.data, "id");
       if (typeof id !== "string") return;
       switch (event.type) {
-        case "session.tool.input.started": {
+        case "session.tool.input.started":
           if (field(event.data, "name") === "subagent") {
             named.add(id);
-            remember(named, id);
+            remember(named);
           }
           return;
-        }
         case "session.tool.called": {
           if (!named.delete(id)) return;
           const input = field(event.data, "input");
           const agent = field(input, "agent");
-          if (typeof agent !== "string" || !reserved.has(agent)) return;
-          const model = field(input, "model");
+          if (typeof agent !== "string" || !RESERVED_IDS.has(agent)) return;
           pending.set(id, {
             agent,
-            ...(typeof model === "string" ? { model } : {}),
             background: field(input, "background") === true,
             started: now(),
           });
-          remember(pending, id);
+          remember(pending);
           return;
         }
         case "session.tool.success":
@@ -188,7 +277,6 @@ export function createLocalLog(ports: {
             ...stamp(),
             kind: "launch",
             agent: launch.agent,
-            ...(launch.model === undefined ? {} : { model: launch.model }),
             background: launch.background,
             outcome:
               event.type === "session.tool.failed"
@@ -200,41 +288,21 @@ export function createLocalLog(ports: {
           });
           return;
         }
-        default:
-          return;
       }
     },
-
-    flush: () => tail,
-
-    async recent(limit) {
-      await tail;
-      const found: LogEntry[] = [];
-      let after: string | undefined;
-      do {
-        const page = await ports.storage.scan({
-          prefix: LOG_PREFIX,
-          limit: 200,
-          ...(after === undefined ? {} : { after }),
-        });
-        for (const entry of page.entries) {
-          const value = (entry as { value?: unknown }).value;
-          if (isEntry(value)) found.push(value);
-        }
-        after = page.next;
-      } while (after !== undefined);
-      return found.slice(-limit);
+    flush: () => bounded(tail),
+    recent(limit) {
+      return bounded(
+        (async () => {
+          await tail;
+          const { entries, complete } = await scan();
+          if (!complete) throw new Error("local log scan limit reached");
+          return entries
+            .map((entry) => readEntry(entry.value))
+            .filter((entry): entry is LogEntry => entry !== undefined)
+            .slice(-Math.min(MAX_ENTRIES, Math.max(1, Math.trunc(limit))));
+        })(),
+      );
     },
   };
-}
-
-// Stored values come back from the host; only entries of this shape are shown.
-function isEntry(value: unknown): value is LogEntry {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { v?: unknown }).v === 1 &&
-    ((value as { kind?: unknown }).kind === "policy" ||
-      (value as { kind?: unknown }).kind === "launch")
-  );
 }

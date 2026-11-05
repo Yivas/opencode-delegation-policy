@@ -93,7 +93,7 @@ test("a launch of a plugin agent is logged with its outcome and no content", asy
       id: "call_1",
       input: {
         agent: "ocv2-advisor-1",
-        model: "acme/wise#high",
+        model: "private prompt\n\u001b[31mD:/private/path",
         prompt: SECRET,
         description: SECRET,
         background: true,
@@ -116,12 +116,11 @@ test("a launch of a plugin agent is logged with its outcome and no content", asy
   assert.deepEqual(
     { ...entry, at: undefined },
     {
-      v: 1,
+      v: 2,
       at: undefined,
       kind: "launch",
       host: "2.0.21",
       agent: "ocv2-advisor-1",
-      model: "acme/wise#high",
       background: true,
       outcome: "running",
       ms: 1_500,
@@ -129,7 +128,7 @@ test("a launch of a plugin agent is logged with its outcome and no content", asy
   );
   assert.doesNotMatch(
     JSON.stringify(entries(storage)),
-    /private prompt|ses_secret/,
+    /private prompt|ses_secret|private\/path|\\u001b/,
   );
 });
 
@@ -188,16 +187,97 @@ test("old entries are removed past the limit, newest kept", async () => {
   for (let index = 0; index < 525; index += 1) {
     clock += 1;
     log.policy(`block ${index}`, PREFERENCES);
+    await log.flush();
   }
-  await log.flush();
 
   const keys = [...storage.records.keys()].sort();
   assert.equal(keys.length, 500);
   // The 25 oldest went; the newest is still there.
-  assert.equal(
-    keys[0],
-    `${LOG_PREFIX}${String(26).padStart(15, "0")}-${String(26).padStart(6, "0")}`,
+  assert.ok(
+    keys[0].startsWith(`${LOG_PREFIX}${String(26).padStart(15, "0")}-`),
   );
+});
+
+test("a stalled write bounds the backlog and read time, and raw stored content is never shown", async () => {
+  const storage = storageDouble();
+  const set = storage.set.bind(storage);
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let writes = 0;
+  storage.set = async (key, value) => {
+    await held;
+    writes += 1;
+    await set(key, value);
+  };
+  const log = createLocalLog({ storage, hostVersion: "2.0.21" });
+  for (let index = 0; index < 600; index += 1)
+    log.policy(`block ${index}`, PREFERENCES);
+  await assert.rejects(log.recent(20), /timed out/);
+  release();
+  await log.flush();
+  assert.ok(writes <= 64);
+  storage.records.set("log/999999999999999-legacy", {
+    v: 1,
+    kind: "launch",
+    model: SECRET,
+  });
+  storage.records.set("log/999999999999999-bad", {
+    v: 2,
+    kind: "launch",
+    at: "not a date",
+    host: SECRET,
+    agent: SECRET,
+  });
+  const shown = await log.recent(500);
+  assert.doesNotMatch(JSON.stringify(shown), /private prompt/);
+  assert.ok(shown.every((entry) => entry.v === 2));
+});
+
+test("bounded pruning recovers an oversized namespace and rebuilds allowed fields", async () => {
+  const storage = storageDouble();
+  storage.records.set("settings/defaults", { keep: true });
+  for (let index = 0; index < 4_001; index += 1) {
+    storage.records.set(
+      `${LOG_PREFIX}${String(index).padStart(15, "0")}-legacy`,
+      {
+        v: 1,
+        kind: "launch",
+        model: SECRET,
+      },
+    );
+  }
+  storage.records.set(`${LOG_PREFIX}000000000005000-extra`, {
+    v: 2,
+    at: "2026-11-05T00:00:00.000Z",
+    host: "2.0.21",
+    kind: "launch",
+    agent: "ocv2-small",
+    background: false,
+    outcome: "completed",
+    ms: 1,
+    model: SECRET,
+    prompt: SECRET,
+  });
+  const log = createLocalLog({ storage, hostVersion: "2.0.21" });
+  log.policy("first", PREFERENCES);
+  await log.flush();
+  assert.ok(storage.records.size < 4_003);
+  for (let index = 1; index < 25; index += 1) {
+    log.policy(`next ${index}`, PREFERENCES);
+    await log.flush();
+  }
+  const shown = await log.recent(500);
+  assert.equal(
+    entries(storage).some((entry) => entry.v === 1),
+    false,
+  );
+  assert.deepEqual(storage.records.get("settings/defaults"), { keep: true });
+  assert.equal(shown.length, 26);
+  assert.doesNotMatch(JSON.stringify(shown), /private prompt/);
+  assert.equal("model" in shown[0], false);
+  assert.equal("prompt" in shown[0], false);
 });
 
 test("a log that cannot be written never throws", async () => {

@@ -447,6 +447,11 @@ test("defaults saved through /delegate reach the main agent after a restart, not
   const before = request();
   await callback(before);
   assert.equal(before.system.length, 1);
+  state.events.push({
+    type: "session.execution.succeeded",
+    data: { sessionID: "root" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
 
   for (const line of [
     "defaults intensity normal",
@@ -487,8 +492,12 @@ test("defaults saved through /delegate reach the main agent after a restart, not
     /latest request carried the delegation policy/,
   );
 
-  // A session command from the TUI changes that session only; the next request there follows it,
-  // with a notice of what changed after the policy.
+  state.events.push({
+    type: "session.execution.succeeded",
+    data: { sessionID: "root" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // A session command between turns changes that session only; the next turn announces it.
   await handlers.run({ line: "orchestrator", sessionID: "root" });
   const session = request();
   await callback(session);
