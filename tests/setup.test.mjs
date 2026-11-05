@@ -290,3 +290,41 @@ test("a malformed catalogue listing leaves advisor safety without effective agen
     { kind: "unregistered", id: "ocv2-advisor-1" },
   ]);
 });
+
+test("registering again after a configuration change updates the registered agents", async () => {
+  const records = new Map();
+  storagedefaults(records, defaults());
+  const agent = transformDouble();
+  const wiring = createWiring({
+    storage: storageDouble(records),
+    catalog: catalogDouble([
+      model("acme", "small-model"),
+      model("acme", "other-model"),
+      model("acme", "advisor-model"),
+    ]),
+    agentTransform: agent.transform,
+    agentList: async () => ({ data: [] }),
+  });
+
+  await wiring.register();
+  agent.rebuild();
+  assert.equal(agent.agents.get("ocv2-small")?.model.id, "small-model");
+
+  // A later configuration reaches the same registration: the host rebuilds from whatever the
+  // callback reads at that moment, not from the list it saw the first time.
+  storagedefaults(
+    records,
+    defaults({
+      roles: {
+        small: { kind: "configured", model: "acme/other-model" },
+        medium: { kind: "unset" },
+        large: { kind: "unset" },
+        visualDesign: { kind: "unset" },
+      },
+    }),
+  );
+  await wiring.register();
+  agent.rebuild();
+
+  assert.equal(agent.agents.get("ocv2-small")?.model.id, "other-model");
+});

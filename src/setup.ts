@@ -66,9 +66,14 @@ export function createWiring(ports: HostPorts): Wiring {
       });
       roleDefinitions = next.roles;
       advisorDefinitions = next.advisors;
-      const definitions = [...roleDefinitions, ...advisorDefinitions];
+      // The callback reads the current lists on every pass. Closing over a snapshot here would keep
+      // the host rebuilding agents from the first configuration it ever saw.
       registration ??= await ports.agentTransform((editor) => {
-        registerAgentDefinitions({ editor, definitions, created });
+        registerAgentDefinitions({
+          editor,
+          definitions: [...roleDefinitions, ...advisorDefinitions],
+          created,
+        });
       });
     },
 
