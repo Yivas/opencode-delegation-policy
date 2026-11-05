@@ -116,7 +116,8 @@ function advisors(...models) {
 // A valid Advisor entry that lists no variant. Models of the shared catalogue have none, which the
 // selector reports as unsupported; a model whose variants exist but are unproven is unmapped.
 function advisorSelection(advisor, id, unlisted = "thinking-unsupported") {
-  return { advisor, model: { providerID: "acme", id }, variants: [], unlisted };
+  const model = { providerID: "acme", id };
+  return { advisor, model, launchModel: model, variants: [], unlisted };
 }
 
 // The usable axis shapes. `warnings` reports an entry that runs with less than it has, and is empty
@@ -1187,9 +1188,10 @@ test("unproven variants and an unproven default keep the Advisor usable and are 
         {
           advisor: 3,
           model: { providerID: "acme", id: "budget-model", variant: "budget" },
+          launchModel: { providerID: "acme", id: "budget-model" },
           variants: [],
           unlisted: "thinking-unmapped",
-          defaultUnproven: true,
+          variantSkipped: true,
         },
       ],
       [
@@ -1232,6 +1234,7 @@ test("an Advisor whose identity the tables cannot resolve stays usable, like the
         {
           advisor: 1,
           model: { providerID: "openai", id: "advisor-model" },
+          launchModel: { providerID: "openai", id: "advisor-model" },
           variants: [],
           unlisted: "thinking-identity-unresolved",
         },
@@ -2175,9 +2178,10 @@ test("native Alibaba off syntax does not prove model-specific eligibility for an
             id: "synthetic-model",
             variant: "no-thinking",
           },
+          launchModel: { providerID: "alibaba", id: "synthetic-model" },
           variants: [],
           unlisted: "thinking-unmapped",
-          defaultUnproven: true,
+          variantSkipped: true,
         },
       ],
       [

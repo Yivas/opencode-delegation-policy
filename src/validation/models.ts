@@ -65,18 +65,20 @@ export type ValidationIssue = {
   | { readonly advisor: number; readonly role?: never }
 );
 
-// `model.variant` is the user's default when the reference carries one. `variants` lists every
-// proven variant the main agent may pass instead. When none can be listed, `variants` is empty,
+// `model` is the configured reference, exactly as the user wrote it; `launchModel` is what a launch
+// must pass, and differs only when an unproven default variant was skipped. `variants` lists every
+// proven variant the main agent may pass instead. When none can be listed, `variants` is empty and
 // `unlisted` says why ("thinking-unsupported" when the model has no proven-capable variant at all,
-// "thinking-unmapped" when some exist but none is proven, and so on), and the Advisor is launched
-// without a variant, like an ordinary role with no thinking policy. `defaultUnproven` marks a
-// default that exists in the catalogue but whose level the tables cannot name yet: it is still used.
+// "thinking-unmapped" when some exist but none is proven, and so on). A default whose level the
+// tables cannot name stays configured but is not launched (`variantSkipped`), because the plugin must
+// not select a reasoning level it cannot verify.
 export type AdvisorSelection = {
   readonly advisor: number;
   readonly model: ModelReference;
+  readonly launchModel: ModelReference;
   readonly variants: readonly ThinkingOption[];
   readonly unlisted?: ThinkingIssueCode;
-  readonly defaultUnproven?: true;
+  readonly variantSkipped?: true;
 };
 
 export type DelegationAxis =
@@ -281,7 +283,7 @@ function advisorWarnings(
 ): readonly ValidationIssue[] {
   const notes: ValidationIssue[] = [];
   for (const entry of advisors) {
-    if (entry.defaultUnproven !== undefined) {
+    if (entry.variantSkipped !== undefined) {
       notes.push({
         advisor: entry.advisor,
         field: "thinking",
@@ -347,13 +349,13 @@ async function resolveAdvisor(
   if (!resolved.ok) {
     return resolved;
   }
-  const { model, inlineVariant } = resolved.value;
-  const base = { advisor, model: resolved.value.reference };
+  const { model, inlineVariant, reference: parsedReference } = resolved.value;
+  const base = { advisor, model: parsedReference };
 
-  // A default written by the user is never dropped. If the tables cannot name its level the entry
-  // still runs with that variant and says so; only a variant the catalogue does not have fails,
-  // and resolveModel already rejected that case.
-  let defaultUnproven: true | undefined;
+  // A default written by the user stays in the configuration, but a level the tables cannot name is
+  // never launched: an unverified variant could pick different reasoning than the user believes, and
+  // cost more. Only a variant the catalogue does not have fails, and resolveModel already rejected it.
+  let variantSkipped: true | undefined;
   if (inlineVariant !== undefined) {
     const proven = selectThinkingVariant(
       model,
@@ -361,7 +363,7 @@ async function resolveAdvisor(
       inlineVariant,
     );
     if (!proven.ok) {
-      defaultUnproven = true;
+      variantSkipped = true;
     }
   }
 
@@ -369,7 +371,16 @@ async function resolveAdvisor(
   // A model that is usable must not become unusable because its reasoning cannot be named: any
   // failure here only means nothing can be listed, exactly like an ordinary role without a policy.
   const listed = selectThinkingVariant(model, ANY_THINKING_LEVEL, undefined);
-  const extra = defaultUnproven === undefined ? {} : { defaultUnproven };
+  const extra =
+    variantSkipped === undefined
+      ? { launchModel: parsedReference }
+      : {
+          launchModel: {
+            providerID: parsedReference.providerID,
+            id: parsedReference.id,
+          },
+          variantSkipped: true as const,
+        };
   if (listed.ok && listed.selection.kind === "options") {
     return {
       ok: true,
