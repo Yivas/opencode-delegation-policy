@@ -39,6 +39,11 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
     disposed: 0,
     disposeFailures,
     visible: cloneModels(models),
+    records: new Map(),
+    agentCallbacks: [],
+    agentTransformCalls: 0,
+    agents: new Map(),
+    effectiveAgents: [],
   };
 
   const model = {
@@ -85,17 +90,75 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
       return { data: state.visible };
     },
   };
+  const storage = {
+    async get(key) {
+      const text = state.records.get(key);
+      return text === undefined ? undefined : JSON.parse(text);
+    },
+    async set(key, value) {
+      state.records.set(key, JSON.stringify(value));
+    },
+    async remove(key) {
+      state.records.delete(key);
+    },
+  };
+  const agentEditor = {
+    get: (id) => state.agents.get(id),
+    list: () => [...state.agents.values()],
+    default() {},
+    update(id, mutate) {
+      const existing = state.agents.get(id) ?? {
+        id,
+        name: id,
+        mode: "primary",
+        hidden: false,
+        permissions: [],
+      };
+      mutate(existing);
+      state.agents.set(id, existing);
+    },
+    remove(id) {
+      state.agents.delete(id);
+    },
+  };
+  const agent = {
+    async transform(callback) {
+      if (this !== agent) throw new Error("agent.transform lost its receiver");
+      state.agentTransformCalls += 1;
+      state.agentCallbacks.push(callback);
+      return {
+        dispose: async () => {
+          state.agentCallbacks.length = 0;
+        },
+      };
+    },
+    async list() {
+      if (this !== agent) throw new Error("agent.list lost its receiver");
+      return {
+        location: { directory: "/synthetic" },
+        data: state.effectiveAgents,
+      };
+    },
+  };
   const context = new Proxy(
     {},
     {
       get(_target, key) {
         if (key === "model") return model;
+        if (key === "storage") return storage;
+        if (key === "agent") return agent;
         throw new Error(`unexpected host domain access: ${String(key)}`);
       },
     },
   );
 
-  return { context, state };
+  return {
+    context,
+    state,
+    rebuildAgents: () => {
+      for (const callback of state.agentCallbacks) callback(agentEditor);
+    },
+  };
 }
 
 function ids(model) {

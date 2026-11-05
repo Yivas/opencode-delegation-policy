@@ -179,6 +179,24 @@ export async function validateDelegationAxes(input: {
   }
 
   const loadCatalog = onceAsync(() => readCatalog(input.catalog));
+  return axesFor(preferences, loadCatalog);
+}
+
+// Validates a preference snapshot that the caller already read. The entry point uses this for the
+// global defaults, which do not belong to a session: agents are registered once, and a session
+// override only changes what a launch passes.
+export async function validatePreferenceAxes(input: {
+  readonly preferences: EffectivePreferences;
+  readonly catalog: ModelCatalog;
+}): Promise<DelegationValidation> {
+  const loadCatalog = onceAsync(() => readCatalog(input.catalog));
+  return axesFor(input.preferences, loadCatalog);
+}
+
+async function axesFor(
+  preferences: EffectivePreferences,
+  loadCatalog: () => Promise<CatalogResult>,
+): Promise<DelegationValidation> {
   return {
     delegation: await validateDelegation(preferences, loadCatalog),
     advisor: await validateAdvisor(preferences, loadCatalog),

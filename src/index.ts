@@ -1,5 +1,6 @@
 import type { Plugin } from "@opencode/plugin";
 
+import { createWiring } from "./setup.js";
 import {
   adaptHostRead,
   adaptHostTransform,
@@ -15,16 +16,27 @@ const delegationPolicy: Plugin.Plugin = {
       ),
       read: adaptHostRead(context.model.list.bind(context.model)),
     });
+    const wiring = createWiring({
+      storage: context.storage,
+      catalog: context.model,
+      agentTransform: context.agent.transform.bind(context.agent),
+      agentList: context.agent.list.bind(context.agent),
+    });
 
     try {
       await provisioner.register();
+      await wiring.register();
     } catch (error) {
-      // Registration may retain a handle after another setup step fails; retire it before failing.
+      // Registration may retain a handle after another setup step fails; retire both before failing.
+      await wiring.dispose();
       await provisioner.dispose();
       throw error;
     }
 
-    return () => provisioner.dispose();
+    return async () => {
+      await wiring.dispose();
+      await provisioner.dispose();
+    };
   },
 };
 
