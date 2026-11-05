@@ -82,5 +82,10 @@ function restrictAdvisor(
   ];
   // Advisors stand alone, as in validation: the registered ones are still consulted.
   if (advisors.length === 0) return { status: "error", issues };
-  return { status: "partial", advisors, issues, warnings: axis.warnings };
+  // Warnings about an Advisor that was just left out would describe something that is not consulted.
+  const kept = new Set(advisors.map((selection) => selection.advisor));
+  const warnings = axis.warnings.filter(
+    (warning) => warning.advisor === undefined || kept.has(warning.advisor),
+  );
+  return { status: "partial", advisors, issues, warnings };
 }

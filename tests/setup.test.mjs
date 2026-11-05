@@ -154,6 +154,43 @@ test("setup registers the roles and advisors of the global defaults", async () =
   });
 });
 
+// What the policy may name is what the host ended up with, not what the plugin handed it: the host's
+// own configuration runs after the plugin and can drop an agent or move it to another model.
+test("the agents the policy may name are the ones the host lists, on their registered model", async () => {
+  const records = new Map();
+  storagedefaults(records, defaults());
+  const agent = transformDouble();
+  let listed = [];
+  const wiring = createWiring({
+    storage: storageDouble(records),
+    catalog: catalogDouble([
+      model("acme", "small-model"),
+      model("acme", "advisor-model"),
+    ]),
+    agentTransform: agent.transform,
+    agentList: async () => ({ data: listed }),
+  });
+
+  assert.deepEqual(await wiring.agents(), []);
+  await wiring.register();
+  agent.rebuild();
+
+  listed = [...agent.agents.values()];
+  assert.deepEqual((await wiring.agents()).map((entry) => entry.id).sort(), [
+    "ocv2-advisor-1",
+    "ocv2-small",
+  ]);
+
+  // The host dropped the advisor and moved the role to another model.
+  listed = [
+    {
+      ...agent.agents.get("ocv2-small"),
+      model: { providerID: "acme", id: "other" },
+    },
+  ];
+  assert.deepEqual(await wiring.agents(), []);
+});
+
 test("a broken advisor model does not stop the roles from registering", async () => {
   const records = new Map();
   // The advisor model does not exist in the catalogue, so only the advisor axis fails.

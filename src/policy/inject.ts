@@ -83,6 +83,7 @@ export type InjectionReport =
       readonly outcome: "failed";
       readonly reason:
         | "session-lookup"
+        | "agent-lookup"
         | "preferences-unreadable"
         | "unexpected-error";
       // The kind of error only (its class name), never its message: enough to tell one defect from
@@ -97,8 +98,9 @@ export type InjectorPorts = {
   readonly session: (
     sessionID: string,
   ) => Promise<{ readonly parentID?: string | undefined }>;
-  // The agents the host was given. The block names only these, whatever the session turned on.
-  readonly agents: () => readonly AgentDefinition[];
+  // The plugin's agents as the host has them. The block names only these, whatever the session
+  // turned on.
+  readonly agents: () => Promise<readonly AgentDefinition[]>;
 };
 
 export type PolicyInjector = {
@@ -157,6 +159,14 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
 
       // A hook that throws could break the person's request, so every failure ends here with no
       // block, as Pi injects nothing on error. The status says which failure it was.
+      let agents: readonly AgentDefinition[];
+      try {
+        agents = await ports.agents();
+      } catch {
+        report = { outcome: "failed", reason: "agent-lookup" };
+        return;
+      }
+
       let block: string | undefined;
       try {
         const { preferences } = await ports.store.readSession(
@@ -167,7 +177,7 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
             preferences,
             catalog: ports.catalog,
           }),
-          ports.agents(),
+          agents,
         );
         block = renderDelegationPolicy({ preferences, validation });
       } catch (error) {

@@ -49,7 +49,7 @@ export type DelegateCommandPorts = {
   readonly inspect?: () => Promise<AgentInspection>;
   // The agents the host was given. The checks below are made against them, because the policy only
   // names what is registered.
-  readonly agents?: () => readonly AgentDefinition[];
+  readonly agents?: () => Promise<readonly AgentDefinition[]>;
   // What happened to the policy block on the latest request of the main agent.
   readonly injection?: () => InjectionReport;
 };
@@ -311,12 +311,11 @@ function roleSetting(value: string): RoleSetting {
 function thinkingSetting(value: string): ThinkingSetting | undefined {
   const word = value.toLowerCase();
   if (word === "unset") return { kind: "unset" };
-  if (!word.includes("..")) return { kind: "fixed", level: word };
-  const [from, to, ...extra] = word.split("..");
-  if (from === undefined || to === undefined || from === "" || to === "") {
-    return undefined;
-  }
-  return extra.length > 0 ? undefined : { kind: "range", from, to };
+  if (!word.includes(".")) return { kind: "fixed", level: word };
+  // Levels never contain a dot, so a range is exactly two dot-free bounds around "..".
+  const range = /^([^.]+)\.\.([^.]+)$/.exec(word);
+  if (range === null) return undefined;
+  return { kind: "range", from: range[1] ?? "", to: range[2] ?? "" };
 }
 
 function isOneOf<T extends string>(
@@ -394,11 +393,27 @@ async function describeValidation(
   agents: DelegateCommandPorts["agents"],
 ): Promise<string[]> {
   const validated = await validatePreferenceAxes({ preferences, catalog });
+  let registered: readonly AgentDefinition[] | undefined;
+  let agentsUnknown = false;
+  if (agents !== undefined) {
+    try {
+      registered = await agents();
+    } catch {
+      // Without the host's list the settings are reported as validated; the line below says the
+      // agents themselves could not be checked.
+      agentsUnknown = true;
+    }
+  }
   const { delegation, advisor } =
-    agents === undefined
+    registered === undefined
       ? validated
-      : restrictToRegistered(validated, agents());
+      : restrictToRegistered(validated, registered);
   const lines: string[] = [];
+  if (agentsUnknown) {
+    lines.push(
+      "Registration check: the host's agent list could not be read, so the checks below ignore which agents exist.",
+    );
+  }
 
   lines.push(
     delegation.status === "active"
@@ -491,6 +506,8 @@ const INJECTION_TEXT: Readonly<
     "the latest request carried no policy because nothing is active for that session.",
   "session-lookup":
     "the latest request carried no policy: the host could not say whether its session is a child.",
+  "agent-lookup":
+    "the latest request carried no policy: the host's agent list could not be read.",
   "preferences-unreadable":
     "the latest request carried no policy: the saved preferences could not be read.",
   "unexpected-error":

@@ -40,9 +40,11 @@ export type Wiring = {
   // stopped being advice-only and any agent under the plugin's prefix that the current configuration
   // no longer defines. The caller decides what to do with each result.
   inspect(): Promise<AgentInspection>;
-  // The agents this plugin has handed to the host, empty until the first registration. The policy
-  // may only name these: a session can turn delegation on, but it cannot create an agent.
-  agents(): readonly AgentDefinition[];
+  // The plugin's agents as the host actually has them: defined by this plugin, present in the host's
+  // effective list, and still on the model they were created with. The policy may only name these: a
+  // session can turn delegation on, but it cannot create an agent, and the host's own configuration
+  // can remove one or change its model after registration.
+  agents(): Promise<readonly AgentDefinition[]>;
   dispose(): Promise<void>;
 };
 
@@ -120,7 +122,23 @@ export function createWiring(ports: HostPorts): Wiring {
       state = "registered";
     },
 
-    agents: () => (registered ? definitions() : []),
+    async agents() {
+      if (!registered) return [];
+      const effective = new Map(
+        effectiveModels(await ports.agentList()).map((agent) => [
+          agent.id,
+          agent.model,
+        ]),
+      );
+      return definitions().filter((definition) => {
+        const model = effective.get(definition.id);
+        return (
+          model !== undefined &&
+          model.providerID === definition.model.providerID &&
+          model.id === definition.model.id
+        );
+      });
+    },
 
     async inspect() {
       // Before the plugin registered anything there is nothing to compare against: the host cannot
@@ -144,6 +162,36 @@ export function createWiring(ports: HostPorts): Wiring {
       state = "pending";
     },
   };
+}
+
+// The id and model of each agent the host lists. An entry without a readable model has none of its
+// own (it would run on its caller's model), so it is left out rather than matched.
+function effectiveModels(listed: unknown): readonly {
+  readonly id: string;
+  readonly model: { readonly providerID: string; readonly id: string };
+}[] {
+  const data = isRecord(listed) ? listed.data : undefined;
+  if (!Array.isArray(data)) return [];
+  const agents: {
+    id: string;
+    model: { providerID: string; id: string };
+  }[] = [];
+  for (const entry of data) {
+    if (!isRecord(entry) || typeof entry.id !== "string") continue;
+    const model = entry.model;
+    if (
+      !isRecord(model) ||
+      typeof model.providerID !== "string" ||
+      typeof model.id !== "string"
+    ) {
+      continue;
+    }
+    agents.push({
+      id: entry.id,
+      model: { providerID: model.providerID, id: model.id },
+    });
+  }
+  return agents;
 }
 
 // The host returns its own records; only the fields the check reads are taken, and an entry without

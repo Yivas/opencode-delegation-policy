@@ -283,6 +283,47 @@ test("an agent created with another model is not named either", async () => {
   assert.deepEqual(system, []);
 });
 
+test("an Advisor without an agent is left out while the registered one is still consulted", async () => {
+  const storage = storageDouble();
+  const store = new PreferenceStore(storage);
+  await store.saveDefaults({
+    advisorMode: "on",
+    advisors: {
+      kind: "configured",
+      models: ["acme/small-model", "acme/small-model"],
+    },
+  });
+  // Only the first Advisor reached the host.
+  const injector = createPolicyInjector({ store, catalog, ...sessions() });
+  const system = [];
+
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  assert.match(system[0].text, /agent "ocv2-advisor-1"/);
+  assert.doesNotMatch(system[0].text, /ocv2-advisor-2/);
+});
+
+test("a host agent list that cannot be read leaves no block and says so", async () => {
+  const { store } = await activeStore();
+  const injector = createPolicyInjector({
+    store,
+    catalog,
+    ...sessions(),
+    agents: async () => {
+      throw new Error("host detail");
+    },
+  });
+  const system = [];
+
+  await injector.apply({ sessionID: "root", agent: "build", system });
+
+  assert.deepEqual(system, []);
+  assert.deepEqual(injector.last(), {
+    outcome: "failed",
+    reason: "agent-lookup",
+  });
+});
+
 test("a block left by an earlier version is recognised by its marker and replaced", () => {
   const system = [
     { ...OTHER },

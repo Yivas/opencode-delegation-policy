@@ -351,7 +351,14 @@ test("a malformed thinking range is refused and the previous policy stays", asyn
   const { store, ports } = setup();
   await runDelegate("defaults thinking small low..high", ports);
 
-  for (const value of ["low..", "..high", "low..mid..high", ".."]) {
+  for (const value of [
+    "low..",
+    "..high",
+    "low..mid..high",
+    "..",
+    "low...high",
+    "low.high",
+  ]) {
     const text = await runDelegate(`defaults thinking small ${value}`, ports);
     assert.match(text, /Usage/, value);
   }

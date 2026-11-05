@@ -367,7 +367,9 @@ test("setup hooks the main agent's requests only, and retires the hook", async (
 });
 
 test("defaults saved through /delegate reach the main agent after a restart, not before", async () => {
-  const { context, state } = setupContext([eligible({ enabled: true })]);
+  const { context, state, rebuildAgents } = setupContext([
+    eligible({ enabled: true }),
+  ]);
   const cleanup = await delegationPolicy.setup(context);
   let [{ handlers }] = state.rpcs;
   let [{ callback }] = state.hooks;
@@ -405,6 +407,9 @@ test("defaults saved through /delegate reach the main agent after a restart, not
   await delegationPolicy.setup(context);
   [{ handlers }] = state.rpcs;
   [{ callback }] = state.hooks;
+  // The host builds its agent list from the registration, as it does when it starts.
+  rebuildAgents();
+  state.effectiveAgents = [...state.agents.values()];
   const after = request();
   await callback(after);
 
