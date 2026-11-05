@@ -7,8 +7,6 @@ model/thinking validator have local unit tests. The entry does not yet apply pol
 There is no published package or verified OpenCode compatibility. Do not install this checkout in
 your personal OpenCode configuration.
 
-The per-provider reasoning tables are data derived from [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) `0.87.1` (MIT). See [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
-
 ## Development
 
 The development baseline is Node.js `24.9.0`, npm `11.6.2` and the public types from
