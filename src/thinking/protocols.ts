@@ -16,7 +16,7 @@ import type { ThinkingLevel } from "./policies.js";
 // - "pi-ai@<version> <file> <model>": Pi's generated catalogue for that model (npm archive, read-only).
 //   The model's thinkingLevelMap, reasoning flag, and compat decide the set. Pi archives used:
 //   0.87.1 (git f07218c4d4bbc12bef056a7058c3dd49dfe41abe) and 1.1.0 (npm, sha512 verified).
-// - "opencode@8a8bd622 <file>": OpenCode's own reader for that overlay. It proves the field is valid and
+// - "opencode@9bbb8ce1 <file>": OpenCode 2.2.5's own reader for that overlay. It proves the field is valid and
 //   that the wire names the level. It does not prove Pi's translation, so it is never Pi parity.
 //
 // A family returns undefined when its overlay or model is outside the proof. Undefined means
@@ -62,16 +62,16 @@ type Family = (
 const GENERIC_EFFORTS: readonly ThinkingLevel[] = ["low", "medium", "high"];
 
 const OPENCODE_RESPONSES =
-  "opencode@8a8bd622 packages/ai/src/protocols/utils/open-responses-options.ts";
+  "opencode@9bbb8ce1 packages/ai/src/protocols/utils/open-responses-options.ts";
 const OPENCODE_CHAT =
-  "opencode@8a8bd622 packages/ai/src/protocols/openai-chat.ts";
+  "opencode@9bbb8ce1 packages/ai/src/protocols/openai-chat.ts";
 const OPENCODE_ALIBABA_CHAT =
-  "opencode@8a8bd622 packages/ai/src/protocols/alibaba-chat.ts";
+  "opencode@9bbb8ce1 packages/ai/src/protocols/alibaba-chat.ts";
 const OPENCODE_ZAI_MESSAGES =
-  "opencode@8a8bd622 packages/ai/src/protocols/zai-messages.ts";
-const OPENCODE_GEMINI = "opencode@8a8bd622 packages/ai/src/protocols/gemini.ts";
+  "opencode@9bbb8ce1 packages/ai/src/protocols/zai-messages.ts";
+const OPENCODE_GEMINI = "opencode@9bbb8ce1 packages/ai/src/protocols/gemini.ts";
 const OPENCODE_OPENROUTER =
-  "opencode@8a8bd622 packages/ai/src/providers/openrouter.ts";
+  "opencode@9bbb8ce1 packages/ai/src/providers/openrouter.ts";
 
 const PI_ANTHROPIC_0_87_1 = "pi-ai@0.87.1 providers/data/anthropic.json";
 const PI_ANTHROPIC_1_1_0 = "pi-ai@1.1.0 providers/data/anthropic.json";
@@ -365,7 +365,7 @@ function bodyOf(variant: ProtocolVariant): unknown {
 }
 
 // The known reasoningEffort literals of the OpenAI responses schema (packages/ai/src/schema/options.ts,
-// blob 88429a2d, at 8a8bd622): none, minimal, low, medium, high, xhigh, max. "none" and a literal
+// blob 4e69d6c7, at 9bbb8ce1): none, minimal, low, medium, high, xhigh, max. "none" and a literal
 // "off" are not proofs of off here; the schema accepts any string, so only these names are read.
 const RESPONSES_EFFORTS: readonly ThinkingLevel[] = [
   "minimal",

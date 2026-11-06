@@ -19,8 +19,9 @@ messages or permissions.
 
 Advisor agents carry a deny-everything permission list. OpenCode applies user configuration after
 the plugin, and an `allow` there can reopen an action; `/delegate status` reports an Advisor whose
-actions are no longer all denied. The policy text is guidance for the main agent, not an
-enforcement boundary.
+actions are no longer all denied and that Advisor is excluded from the policy. This snapshot check
+does not prevent later permission changes or manual launches. The policy text is guidance for the
+main agent, not an enforcement boundary.
 
 A user agent with one of the reserved ids is overwritten by registration. The plugin reports, and
 does not delete, reserved agents its current configuration no longer defines.
@@ -30,9 +31,10 @@ the fields it keeps. Settings and log entries are stored by OpenCode, not encryp
 Do not put credentials in model references.
 
 Use `npm ci --ignore-scripts` for development dependencies. The pinned development tree has
-[open dependency security alerts](https://github.com/Yivas/opencode-delegation-policy/security/dependabot),
-including a critical Seroval deserialization advisory. Disabling install scripts does not resolve
-those advisories. The emitted plugin does not import these development packages, but the development
+[open dependency security alerts](https://github.com/Yivas/opencode-delegation-policy/security/dependabot).
+The SDK 2.2.5 and terminal-peer update addresses the earlier Seroval and Babel advisories in the
+resolved development lock; known moderate Glob/Minimatch advisories remain. Disabling install
+scripts does not resolve those advisories or qualify the host binary. The emitted plugin does not import these development packages, but the development
 environment still needs assessment before handling untrusted input. The unit suite runs against
 doubles of the host API and is not a tested runtime security boundary.
 

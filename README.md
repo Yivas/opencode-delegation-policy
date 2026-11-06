@@ -1,7 +1,7 @@
 # opencode-delegation-policy
 
 Delegation policy for OpenCode v2, with explicit roles and model selection. It ports the behavior of
-the Pi extension `pi-delegation-policy` 0.25 to the public plugin API of OpenCode `2.0.21`.
+the Pi extension `pi-delegation-policy` 0.25 to the public plugin API of OpenCode `2.2.5`.
 
 **Unreleased and not yet run inside OpenCode.** Every part has local tests against doubles of the
 host API, and none of it has been observed in a real OpenCode host. There is no published package
@@ -84,7 +84,8 @@ Matching a catalogue entry is source evidence, not proof of what a provider does
 
 Each Advisor consultation sends a brief to another model, and there can be up to three Advisors per
 checkpoint, so one checkpoint can mean up to three extra model calls. The brief is the only context
-an Advisor gets: OpenCode 2.0.21 has no public way to launch a child with the parent conversation.
+an Advisor gets: new children launched by OpenCode's `subagent` tool start with fresh context. The
+plugin does not copy or forward the parent conversation.
 
 The local log stays in the plugin's own OpenCode storage. It keeps times, the host version, a hash of
 the policy block when it changes, the modes in force and, for each launch of a plugin agent, its id,
@@ -144,15 +145,15 @@ These are known gaps, not settled behavior:
   runtime, which has not been checked.
 - Agents left over from an earlier configuration are reported, not removed.
 - The notice resets when OpenCode restarts, so a change made while it was stopped is not announced.
-- A tool that launches Advisors on the main agent's behalf (Pi's `consult_advisor`) is not built:
-  plugin-created sessions cannot be children of the conversation in this host version.
+- Pi's `consult_advisor` tool is not built. Consultations use OpenCode's own `subagent` tool; the
+  development baseline update does not introduce another launcher.
 
 ## Development
 
-The baseline is Node.js `24.9.0`, npm `11.6.2` and the public types from `@opencode/plugin@2.0.21`
-and its terminal UI peers, installed as exact development dependencies. Recent checks ran with
-Node.js `24.22.1` and npm `11.21.1`. The pinned `@opentui/core@0.5.14` declares Node.js `>=26.4.0`
-or Bun `>=1.3.0`; npm reports an engine warning under Node 24. The local checks use its types, not
+The development target is `@opencode/plugin@2.2.5`, with theme `2.2.5`, OpenTUI core/solid `0.8.0`
+and Solid `1.9.17`, installed as exact development dependencies. Recent checks ran with Node.js
+`24.22.1` and npm `11.21.1`. The pinned `@opentui/core@0.8.0` declares Node.js `>=26.4.0` or Bun
+`>=1.3.14`; npm reports an engine warning under Node 24. The local checks use its types, not
 its terminal runtime, and do not establish runtime compatibility under Node 24.
 
 ```bash

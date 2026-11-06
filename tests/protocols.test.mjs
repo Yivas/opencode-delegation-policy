@@ -1216,7 +1216,7 @@ test("an OpenCode-only wrapper proof is native and never cites Pi", () => {
   assert.equal(proof.sourceScope, "native-fields");
   assert.equal(proof.transportKind, "native");
   assert.deepEqual(proof.compatibleLevels, ["low"]);
-  assert.match(proof.evidence, /^opencode@8a8bd622 /);
+  assert.match(proof.evidence, /^opencode@9bbb8ce1 /);
 });
 
 test("Anthropic catalogue recipe levels remain projections, not request-level proofs", () => {
@@ -1342,7 +1342,7 @@ test("an openai or xai responses proof cites the OpenCode schema and never Pi", 
     assert.deepEqual(proof.compatibleLevels, ["xhigh"]);
     assert.equal(
       proof.evidence,
-      "opencode@8a8bd622 packages/ai/src/protocols/utils/open-responses-options.ts",
+      "opencode@9bbb8ce1 packages/ai/src/protocols/utils/open-responses-options.ts",
     );
   }
 });

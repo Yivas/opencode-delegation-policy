@@ -574,6 +574,26 @@ test("reasoningConfig cannot compete with either a positive or off recipe", () =
   }
 });
 
+test("OpenCode 2.2.5 reasoning mode and context settings are not admitted without a proof", () => {
+  const info = model({ id: "gpt-6-luna", modelID: "gpt-6-luna" });
+  for (const [key, value] of [
+    ["reasoningMode", "pro"],
+    ["reasoningContext", "all"],
+  ]) {
+    for (const owner of ["model", "variant"]) {
+      const item = variant("bound", "high");
+      const modelInfo =
+        owner === "model" ? { ...info, settings: { [key]: value } } : info;
+      if (owner === "variant")
+        item.settings = { ...item.settings, [key]: value };
+      assert.deepEqual(selected(modelInfo, item, high), {
+        ok: false,
+        code: "thinking-controls-unproven",
+      });
+    }
+  }
+});
+
 test("the OpenAI facade defaults are included even when omitted from declared metadata", () => {
   const effortOnly = { id: "high", settings: { reasoningEffort: "high" } };
   assert.equal(selected(model(), effortOnly, high).ok, true);
@@ -1991,7 +2011,7 @@ test("Copilot matches only the exact declared package, provider, model ID, and R
     "packages/core/src/github-copilot/responses/openai-responses-language-model.ts",
     "packages/core/src/aisdk.ts",
     "packages/core/src/plugin/provider/github-copilot.ts",
-    "packages/core/src/provider.ts",
+    "packages/core/src/model.ts",
   ]) {
     assert.ok(admitted.selection.evidence.includes(sourcePath), sourcePath);
   }

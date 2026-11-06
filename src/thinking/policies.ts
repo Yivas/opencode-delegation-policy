@@ -27,7 +27,7 @@ export type ThinkingIssueCode =
   | "thinking-controls-unproven"
   | "thinking-construction-unproven";
 
-// Structural subset of the host's model metadata (Model.Info from @opencode/schema 2.0.21).
+// Structural subset of the host's model metadata (Model.Info from @opencode/schema 2.2.5).
 // The catalogue port supplies these objects; this module only reads them.
 export type ThinkingVariant = {
   readonly id: string;

@@ -124,7 +124,8 @@ export type DelegationValidation = {
   readonly advisor: AdvisorAxis;
 };
 
-// The fields the resolver reads from a Model.Info entry (packages/schema/src/model.ts, blob b52018f9).
+// The fields the resolver reads from a Model.Info entry (packages/schema/src/model.ts at 9bbb8ce1,
+// blob 8d198338).
 type CatalogModel = {
   readonly providerID: string;
   readonly id: string;
@@ -518,7 +519,7 @@ async function resolveModel(
   return { ok: true, value: { reference: parsed, model, inlineVariant } };
 }
 
-// Mirrors the host's Model.Ref grammar (packages/schema/src/model.ts, blob b52018f9): the first
+// Mirrors the host's Model.Ref grammar (packages/schema/src/model.ts at 9bbb8ce1, blob 8d198338): the first
 // slash ends a non-empty provider, the rest up to the first hash after it is the model id (it may
 // contain slashes), and an optional non-empty variant follows that hash. No other normalisation.
 function parseModelReference(text: string): ModelReference | undefined {

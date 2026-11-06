@@ -11,12 +11,16 @@ revision, the public API involved, and the user-visible behavior. No software ba
 yet; do not report untested compatibility as established behavior.
 
 Keep each pull request focused. Explain the reason, list the files changed, check relative links,
-and identify checks actually run. Use Node.js `24.9.0` and npm `11.6.2` for the development baseline:
+and identify checks actually run. The development target is SDK `2.2.5`; recent local checks ran
+with Node.js `24.22.1` and npm `11.21.1`:
 
 ```bash
 npm ci --ignore-scripts
 npm run check
 ```
+
+These checks use the terminal peers' types, not their runtime. The pinned OpenTUI core requires
+Node.js `>=26.4.0` or Bun `>=1.3.14`; a passing check under Node 24 does not qualify terminal loading.
 
 Add tests at the boundary the change crosses, with doubles only for the host API (storage, model
 catalogue, agent editor, sessions, RPC, events); do not mock this project's own parser, validator or
