@@ -164,6 +164,7 @@ test("a preview leaves storage untouched and apply requires its unchanged source
     change: { intensity: "off" },
   });
   assert.equal(stale.ok, false);
+  assert.equal(stale.persistence, "unchanged");
   assert.match(stale.text, /settings changed/);
   assert.equal(f.writes(), 1);
 });
@@ -217,6 +218,7 @@ test("a write with a lost confirmation stays uncertain and exposes no host error
     change: { intensity: "normal" },
   });
   assert.equal(result.ok, false);
+  assert.equal(result.persistence, "unknown");
   assert.match(result.text, /Could not confirm the save/);
   assert.doesNotMatch(result.text, /private host data/);
   assert.equal((await f.store.readGlobal()).preferences.intensity, "normal");

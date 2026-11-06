@@ -234,8 +234,12 @@ export const editorChangeInput = {
 } as const;
 const editorFailureSchema = {
   type: "object",
-  properties: { ok: { const: false }, text: { type: "string" } },
-  required: ["ok", "text"],
+  properties: {
+    ok: { const: false },
+    persistence: { type: "string", enum: ["unchanged", "unknown"] },
+    text: { type: "string" },
+  },
+  required: ["ok", "persistence", "text"],
   additionalProperties: false,
 } as const;
 export const editorReadOutput = {
@@ -256,7 +260,11 @@ export const editorChangeOutput = {
     editorFailureSchema,
   ],
 } as const;
-export type EditorFailure = { readonly ok: false; readonly text: string };
+export type EditorFailure = {
+  readonly ok: false;
+  readonly persistence: "unchanged" | "unknown";
+  readonly text: string;
+};
 export type EditorReply =
   | (EditorTarget & { readonly ok: true; readonly text: string })
   | EditorFailure;

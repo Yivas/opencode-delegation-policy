@@ -35,12 +35,20 @@ obligations; it cannot enforce them.
 
 ## Settings
 
-`/delegate` lives in the terminal interface and answers in a dialog. Typed alone, it opens a selector
-that builds the same commands.
+`/delegate` lives in the terminal interface and answers in a dialog. Typed alone, it opens a menu
+with quick commands and an editor for the open session or the defaults. The editor shows value
+origins, filters models from the host catalogue, and keeps changes in a local draft. Preview validates
+without saving; Apply asks for confirmation. Closing a changed draft asks before discarding it.
+
+A concurrent settings change refuses Apply instead of overwriting the other client's work. Reload
+source settings keeps the draft and takes a fresh revision for another preview. If a save cannot be
+confirmed, the editor keeps the draft but disables Apply until a successful reload. These checks
+coordinate one server instance; they do not provide compare-and-swap across separate processes.
 
 | Command | Effect |
 | --- | --- |
 | `/delegate` | Interactive command selector; cancelling sends nothing |
+| `/delegate edit [session\|defaults]` | Open the draft editor; without a scope, use the open session or defaults on the home screen |
 | `/delegate status` | Settings of the open session, or the defaults on the home screen, with where each value comes from and whether it works |
 | `/delegate <off\|normal\|aggressive\|orchestrator>` | Intensity of the open session |
 | `/delegate advisor <off\|on\|with-delegation>` | Advisor mode of the open session |
@@ -140,7 +148,10 @@ These are known gaps, not settled behavior:
 ## Development
 
 The baseline is Node.js `24.9.0`, npm `11.6.2` and the public types from `@opencode/plugin@2.0.21`
-and its terminal UI peers, installed as exact development dependencies.
+and its terminal UI peers, installed as exact development dependencies. Recent checks ran with
+Node.js `24.22.1` and npm `11.21.1`. The pinned `@opentui/core@0.5.14` declares Node.js `>=26.4.0`
+or Bun `>=1.3.0`; npm reports an engine warning under Node 24. The local checks use its types, not
+its terminal runtime, and do not establish runtime compatibility under Node 24.
 
 ```bash
 npm ci --ignore-scripts

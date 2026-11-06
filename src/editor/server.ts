@@ -70,11 +70,13 @@ function failure(error: unknown, mayHaveWritten: boolean): EditorFailure {
   if (error instanceof PreferenceStateError) {
     return {
       ok: false,
+      persistence: error.persistence === "unknown" ? "unknown" : "unchanged",
       text: `${error.persistence === "unknown" ? "Could not confirm the save" : "Not applied"}: ${error.message}`,
     };
   }
   return {
     ok: false,
+    persistence: mayHaveWritten ? "unknown" : "unchanged",
     text: mayHaveWritten
       ? "The save result could not be confirmed. Reopen /delegate status before relying on the settings."
       : "The delegation editor could not read or validate this request. Nothing was changed. Reopen /delegate and try again.",

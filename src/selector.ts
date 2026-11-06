@@ -7,11 +7,15 @@ export type SelectOption<Value> = {
   readonly title: string;
   readonly value: Value;
   readonly description?: string;
+  readonly footer?: string;
+  readonly disabled?: boolean;
 };
 
 export type SelectorDialogs = {
   readonly select: <Value>(options: {
     title: string;
+    placeholder?: string;
+    current?: Value;
     options: readonly SelectOption<Value>[];
   }) => Promise<Value | undefined>;
   readonly prompt: (options: {
@@ -28,6 +32,8 @@ const ROLES = ["small", "medium", "large", "visual-design"] as const;
 
 type Action =
   | "status"
+  | "editor-session"
+  | "editor-defaults"
   | "session-intensity"
   | "session-advisor"
   | "session-preference"
@@ -60,6 +66,11 @@ export async function chooseDelegateLine(
 ): Promise<string | undefined> {
   const sessionActions: SelectOption<Action>[] = sessionOpen
     ? [
+        {
+          title: "Edit this session",
+          value: "editor-session",
+          description: "Draft, preview and apply session settings.",
+        },
         { title: "This session: intensity", value: "session-intensity" },
         { title: "This session: Advisor mode", value: "session-advisor" },
         {
@@ -83,6 +94,11 @@ export async function chooseDelegateLine(
     options: [
       { title: "Show status", value: "status" },
       ...sessionActions,
+      {
+        title: "Edit defaults",
+        value: "editor-defaults",
+        description: "Pick catalogue models and preview a draft before saving.",
+      },
       { title: "Defaults: intensity", value: "defaults-intensity" },
       { title: "Defaults: Advisor mode", value: "defaults-advisor" },
       { title: "Defaults: model preference", value: "defaults-preference" },
@@ -98,6 +114,10 @@ export async function chooseDelegateLine(
       return undefined;
     case "status":
       return "status";
+    case "editor-session":
+      return "edit session";
+    case "editor-defaults":
+      return "edit defaults";
     case "log":
       return "log";
     case "session-reset":

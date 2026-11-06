@@ -1,5 +1,10 @@
 import type { Plugin } from "@opencode/plugin/tui";
 
+import {
+  type EditorClient,
+  type EditorDialogs,
+  runPreferenceEditor,
+} from "./editor/client.js";
 import { delegateRpc } from "./rpc.js";
 import { chooseDelegateLine, type SelectorDialogs } from "./selector.js";
 
@@ -66,7 +71,8 @@ export type DelegateTuiPorts = {
   }) => Promise<void>;
   // The host's dialogs for the interactive selector. Without them a bare `/delegate` shows the
   // status, as typed commands always can.
-  readonly dialogs?: SelectorDialogs;
+  readonly dialogs?: SelectorDialogs & Partial<Pick<EditorDialogs, "confirm">>;
+  readonly editor?: EditorClient;
 };
 
 // What `/delegate` does in the TUI, separated from the host context so it can be exercised alone. A
@@ -107,6 +113,57 @@ export async function runDelegateInTui(
     line = chosen;
   }
 
+  // Normalize only command words for interception. Other lines, including model references, travel
+  // unchanged through the existing command RPC.
+  const aliasWords = line.split(/\s+/);
+  if (aliasWords[0]?.toLowerCase() === "/delegate") aliasWords.shift();
+  const alias = aliasWords.map((word) => word.toLowerCase()).join(" ");
+  if (
+    alias === "edit" ||
+    alias === "edit session" ||
+    alias === "edit defaults"
+  ) {
+    const sessionID = ports.sessionID();
+    const scope =
+      alias === "edit defaults" || (alias === "edit" && sessionID === undefined)
+        ? "defaults"
+        : "session";
+    const confirm = ports.dialogs?.confirm;
+    if (
+      ports.editor === undefined ||
+      ports.dialogs === undefined ||
+      confirm === undefined ||
+      (scope === "session" && sessionID === undefined)
+    ) {
+      await ports.alert({
+        title: TITLE,
+        message:
+          "This editor is unavailable here. Open a session for session settings, or use the typed /delegate commands.",
+      });
+      return;
+    }
+    const dialogs = ports.dialogs;
+    await runPreferenceEditor(
+      {
+        scope,
+        ...(scope === "session" && sessionID !== undefined
+          ? { sessionID }
+          : {}),
+      },
+      {
+        client: ports.editor,
+        sessionID: ports.sessionID,
+        dialogs: {
+          select: (options) => dialogs.select(options),
+          prompt: (options) => dialogs.prompt(options),
+          confirm: (options) => confirm.call(dialogs, options),
+          alert: ports.alert,
+        },
+      },
+    );
+    return;
+  }
+
   let message: string;
   try {
     const sessionID = ports.sessionID();
@@ -141,6 +198,15 @@ const plugin: Plugin.Definition = {
               dialogs: {
                 select: (options) => context.ui.dialog.select(options),
                 prompt: (options) => context.ui.dialog.prompt(options),
+                confirm: (options) => context.ui.dialog.confirm(options),
+              },
+              editor: {
+                read: (input) =>
+                  context.client.rpc(delegateRpc).editorRead(input),
+                preview: (input) =>
+                  context.client.rpc(delegateRpc).editorPreview(input),
+                apply: (input) =>
+                  context.client.rpc(delegateRpc).editorApply(input),
               },
               sessionID: () => {
                 const route = context.ui.router.current();
