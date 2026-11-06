@@ -33,8 +33,18 @@ Do not put credentials in model references.
 Use `npm ci --ignore-scripts` for development dependencies. The pinned development tree has
 [open dependency security alerts](https://github.com/Yivas/opencode-delegation-policy/security/dependabot).
 The SDK 2.2.5 and terminal-peer update addresses the earlier Seroval and Babel advisories in the
-resolved development lock; known moderate Glob/Minimatch advisories remain. Disabling install
-scripts does not resolve those advisories or qualify the host binary. The emitted plugin does not import these development packages, but the development
+resolved development lock. Disabling install scripts does not resolve advisories or qualify the
+host binary.
+
+**Accepted residual risk (2026-11-06).** The medium Minimatch advisory
+[GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) remains, with related
+moderate Glob findings. `@opencode/util@2.2.5`, a dependency of the SDK, pins Minimatch `10.2.5`; the
+fix is in `11.0.1`, a major version outside that pin. The affected packages are development-only:
+`npm audit --omit=dev` reports none. The emitted plugin imports nothing from the SDK, the SDK peer is
+marked optional so installing the plugin does not pull it in, and this project passes no glob patterns
+to these packages. No override is applied, because forcing Minimatch 11 under the SDK could break it.
+This is reviewed when the SDK is updated, if a high or critical advisory appears, if the code starts
+handling untrusted patterns, and no later than 2026-12-06. The emitted plugin does not import these development packages, but the development
 environment still needs assessment before handling untrusted input. The unit suite runs against
 doubles of the host API and is not a tested runtime security boundary.
 

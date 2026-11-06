@@ -23,6 +23,11 @@
   "peerDependencies": {
     "@opencode/plugin": "2.2.5"
   },
+  "peerDependenciesMeta": {
+    "@opencode/plugin": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@biomejs/biome": "2.2.5",
     "@opencode/plugin": "2.2.5",
