@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.2 — 2026-11-06
+
+### Fixed
+
+- Correct the README's claim that the alpha has no `latest` npm tag. The public registry requires
+  that alias; it does not establish stability or compatibility. Alpha updates use `next`, and the
+  installation example pins the exact alpha.2 version rather than relying on either alias.
+- No plugin logic or dependency changes. The host-validation limits of alpha.1 still apply.
+
 ## 0.1.0-alpha.1 — 2026-11-06
 
 First experimental npm package, targeting the public OpenCode 2.2.5 plugin API. Host loading and

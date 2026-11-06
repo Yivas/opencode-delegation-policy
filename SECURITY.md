@@ -5,7 +5,7 @@
 | Line | Support |
 | --- | --- |
 | Development source | Reports welcome; not yet run inside OpenCode |
-| `0.1.0-alpha.1` | Experimental; reports welcome, no verified OpenCode runtime support |
+| `0.1.0-alpha.1` and `0.1.0-alpha.2` | Experimental; reports welcome, no verified OpenCode runtime support |
 
 ## What the plugin can touch
 

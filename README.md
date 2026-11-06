@@ -3,7 +3,7 @@
 Delegation policy for OpenCode v2, with explicit roles and model selection. It ports the behavior of
 the Pi extension `pi-delegation-policy` 0.25 to the public plugin API of OpenCode `2.2.5`.
 
-**Experimental alpha `0.1.0-alpha.1`; not yet run inside OpenCode.** Every part has local tests
+**Experimental alpha `0.1.0-alpha.2`; not yet run inside OpenCode.** Every part has local tests
 against doubles of the host API, but loading, permissions, persistence and terminal rendering have
 not been observed in a real host. OpenCode `2.2.5` is the development target, not a supported or
 verified runtime. Use a setup you can recover; publishing this alpha does not establish compatibility.
@@ -113,15 +113,17 @@ reference to the existing list, keeping other entries:
 
 ```jsonc
 {
-  "plugins": ["opencode-delegation-policy@0.1.0-alpha.1"]
+  "plugins": ["opencode-delegation-policy@0.1.0-alpha.2"]
 }
 ```
 
 Restart that OpenCode instance and open `/delegate status`, then `/delegate`. Start by checking
 that both dialogs open and the footer appears, without sending a message to a model. If loading
 fails, remove only the new plugin entry and restart. Keep a copy of the configuration before editing
-it; preferences, logs and registered agents may persist after removal. The package is distributed
-under npm's `next` tag, not `latest`; use the exact version above for a reproducible installation.
+it; preferences, logs and registered agents may persist after removal. Alpha updates use npm's `next`
+tag. The public registry also requires a `latest` alias; its presence is not a statement of stability
+or verified compatibility, and it may reference a different release. Use the exact version above
+for a reproducible installation. Do not try to delete `latest`.
 The first registry installation needs network access. Model calls are not needed for these initial
 checks, but this does not promise that OpenCode makes no other network requests on startup.
 
