@@ -1,8 +1,8 @@
 import type { AgentDefinition } from "../agents/register.js";
+import type { LogEntry } from "../log/local-log.js";
 import type { InjectionReport } from "../policy/inject.js";
 import { restrictToRegistered } from "../policy/registered.js";
 import type { TurnWatchState } from "../policy/turns.js";
-import type { LogEntry } from "../log/local-log.js";
 import type { AgentInspection } from "../setup.js";
 import type { PreferenceSource, PreferenceView } from "../state/effective.js";
 import {
@@ -139,18 +139,18 @@ export async function runDelegate(
     switch (request.kind) {
       case "status":
         return sessionID === undefined
-          ? await report(
+          ? await describePreferenceView(
               await ports.store.readGlobal(),
               ports,
               "No session is open; these are the defaults.",
             )
-          : await report(
+          : await describePreferenceView(
               await ports.store.readSession(sessionID),
               ports,
               "This session:",
             );
       case "defaults":
-        return await report(
+        return await describePreferenceView(
           await ports.store.saveDefaults(request.change),
           ports,
           "Defaults saved.",
@@ -170,7 +170,11 @@ export async function runDelegate(
             : request.kind === "clear"
               ? await ports.store.clearSession(sessionID)
               : await ports.store.applySession(sessionID, request.change);
-        return await report(view, ports, "This session, saved:");
+        return await describePreferenceView(
+          view,
+          ports,
+          "This session, saved:",
+        );
       }
     }
   } catch (error) {
@@ -341,7 +345,7 @@ const SOURCE_NAMES: Readonly<Record<PreferenceSource, string>> = {
   session: "session",
 };
 
-async function report(
+export async function describePreferenceView(
   view: PreferenceView,
   ports: DelegateCommandPorts,
   heading: string,

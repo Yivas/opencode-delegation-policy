@@ -377,6 +377,39 @@ test("the server answers the TUI's request with the command's report", async () 
   await assert.rejects(handlers.run({}), TypeError);
 });
 
+test("the registered editor RPC previews without writing and rejects an outdated draft", async () => {
+  const { context, state } = setupContext([eligible({ enabled: true })]);
+  const cleanup = await delegationPolicy.setup(context);
+  try {
+    const { handlers } = state.rpcs[0];
+    const snapshot = await handlers.editorRead({ scope: "defaults" });
+    assert.equal(snapshot.ok, true);
+    const input = {
+      scope: "defaults",
+      revision: snapshot.revision,
+      change: { intensity: "normal" },
+    };
+    assert.equal((await handlers.editorPreview(input)).ok, true);
+    assert.equal(state.records.has("preferences.v1.global"), false);
+    assert.equal((await handlers.editorApply(input)).ok, true);
+    assert.equal(
+      JSON.parse(state.records.get("preferences.v1.global")).intensity,
+      "normal",
+    );
+    assert.equal(
+      (await handlers.editorApply({ ...input, change: { intensity: "off" } }))
+        .ok,
+      false,
+    );
+    assert.equal(
+      JSON.parse(state.records.get("preferences.v1.global")).intensity,
+      "normal",
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
 test("/delegate log shows what was injected, from the plugin's own storage", async () => {
   const { context, state, rebuildAgents } = setupContext([
     eligible({ enabled: true }),

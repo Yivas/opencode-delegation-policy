@@ -1,6 +1,7 @@
 import type { Plugin } from "@opencode/plugin";
 
 import { delegateArguments, runDelegate } from "./command/delegate.js";
+import { createPreferenceEditor } from "./editor/server.js";
 import { createLocalLog } from "./log/local-log.js";
 import { createPolicyInjector } from "./policy/inject.js";
 import { watchTurns } from "./policy/turns.js";
@@ -100,7 +101,11 @@ const delegationPolicy: Plugin.Plugin = {
     try {
       await provisioner.register();
       await wiring.register();
+      const editor = createPreferenceEditor(delegatePorts);
       rpcRegistration = await context.rpc.register(delegateRpc, {
+        editorRead: (input) => editor.read(input),
+        editorPreview: (input) => editor.preview(input),
+        editorApply: (input) => editor.apply(input),
         run: async (input) => {
           // The host checks the input against the contract before this runs, so anything else is a
           // defect and fails loudly instead of being read as an empty command.

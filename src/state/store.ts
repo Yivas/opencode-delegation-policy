@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import type { Plugin } from "@opencode/plugin";
 
 import {
@@ -40,8 +41,15 @@ const SESSION_ID_RULE = `session identifiers must be well-formed text of 1 to ${
 const SESSION_RESET_INTENSITY = "off";
 const SESSION_RESET_ADVISOR_MODE = "off";
 
+export type PreferenceSnapshot = {
+  readonly revision: string;
+  readonly sessionID?: string;
+  readonly view: PreferenceView;
+};
+
 export class PreferenceStore {
   readonly #storage: PreferenceStorage;
+  readonly #generation = randomUUID();
   #tail: Promise<unknown> = Promise.resolve();
 
   constructor(storage: PreferenceStorage) {
@@ -68,11 +76,64 @@ export class PreferenceStore {
     });
   }
 
-  // Explicit defaults: this is the only operation that writes the global document.
-  saveDefaults(change: GlobalPreferenceChange): Promise<PreferenceView> {
+  // An editor revision covers the source documents, scope and this store generation, not just the
+  // effective values. It is opaque to the TUI and invalid after a restart. This is not host-wide CAS.
+  readForEdit(sessionID?: string): Promise<PreferenceSnapshot> {
     return this.#serialize(async () => {
-      const current = (await this.#loadGlobal()) ?? BUILT_IN_GLOBAL_PREFERENCES;
-      const next = parseGlobalChange(current, change);
+      const key = sessionID === undefined ? undefined : sessionKey(sessionID);
+      const global = await this.#loadGlobal();
+      const session =
+        key === undefined ? undefined : await this.#loadSession(key);
+      return {
+        revision: this.#revision(global, session, sessionID),
+        ...(sessionID === undefined ? {} : { sessionID }),
+        view: resolvePreferences(global, session),
+      };
+    });
+  }
+
+  // Preview uses the same parsers as persistence but never writes. Re-reading under the queue also
+  // refuses a preview against stale sources rather than validating a silently changed draft.
+  previewForEdit(
+    revision: string,
+    change: unknown,
+    sessionID?: string,
+  ): Promise<PreferenceView> {
+    return this.#serialize(async () => {
+      const key = sessionID === undefined ? undefined : sessionKey(sessionID);
+      const global = await this.#loadGlobal();
+      const session =
+        key === undefined ? undefined : await this.#loadSession(key);
+      this.#expectRevision(revision, global, session, sessionID);
+      return sessionID === undefined
+        ? resolvePreferences(
+            parseGlobalChange(global ?? BUILT_IN_GLOBAL_PREFERENCES, change),
+            undefined,
+          )
+        : resolvePreferences(
+            global,
+            parseSessionChange(
+              session ?? INHERITING_SESSION_PREFERENCES,
+              change,
+            ),
+          );
+    });
+  }
+
+  // Explicit defaults: this is the only operation that writes the global document. An editor may
+  // require its source revision; the check and write are one serialized operation on this instance.
+  saveDefaults(
+    change: GlobalPreferenceChange,
+    expectedRevision?: string,
+  ): Promise<PreferenceView> {
+    return this.#serialize(async () => {
+      const current = await this.#loadGlobal();
+      if (expectedRevision !== undefined)
+        this.#expectRevision(expectedRevision, current);
+      const next = parseGlobalChange(
+        current ?? BUILT_IN_GLOBAL_PREFERENCES,
+        change,
+      );
       await this.#write(GLOBAL_KEY, next);
       return resolvePreferences(next, undefined);
     });
@@ -81,13 +142,18 @@ export class PreferenceStore {
   applySession(
     sessionID: string,
     change: SessionPreferenceChange,
+    expectedRevision?: string,
   ): Promise<PreferenceView> {
     return this.#serialize(async () => {
       const key = sessionKey(sessionID);
       const global = await this.#loadGlobal();
-      const current =
-        (await this.#loadSession(key)) ?? INHERITING_SESSION_PREFERENCES;
-      const next = parseSessionChange(current, change);
+      const current = await this.#loadSession(key);
+      if (expectedRevision !== undefined)
+        this.#expectRevision(expectedRevision, global, current, sessionID);
+      const next = parseSessionChange(
+        current ?? INHERITING_SESSION_PREFERENCES,
+        change,
+      );
       await this.#write(key, next);
       return resolvePreferences(global, next);
     });
@@ -120,6 +186,33 @@ export class PreferenceStore {
       await this.#write(key, next);
       return resolvePreferences(global, next);
     });
+  }
+
+  #revision(
+    global: GlobalPreferences | undefined,
+    session?: SessionPreferences,
+    sessionID?: string,
+  ): string {
+    return createHash("sha256")
+      .update(this.#generation)
+      .update(
+        JSON.stringify([sessionID ?? null, global ?? null, session ?? null]),
+      )
+      .digest("hex");
+  }
+
+  #expectRevision(
+    expected: string,
+    global: GlobalPreferences | undefined,
+    session?: SessionPreferences,
+    sessionID?: string,
+  ): void {
+    if (expected !== this.#revision(global, session, sessionID)) {
+      throw new PreferenceStateError(
+        "stale-preferences",
+        "the saved settings changed or the server restarted; reopen the editor before applying this draft",
+      );
+    }
   }
 
   #serialize<T>(operation: () => Promise<T>): Promise<T> {

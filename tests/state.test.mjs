@@ -531,6 +531,81 @@ test("concurrent mutations on one store instance keep every confirmed change", a
   assert.equal(view.preferences.preference, "efficient");
 });
 
+test("editor previews use the persistence parser without applying the draft", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  const defaults = await store.readForEdit();
+  const session = await store.readForEdit("parent");
+  const draft = await store.previewForEdit(defaults.revision, {
+    intensity: "normal",
+    roles: { small: { kind: "disabled" } },
+  });
+  assert.equal(draft.preferences.intensity, "normal");
+  assert.equal(draft.provenance.intensity, "global");
+  const override = await store.previewForEdit(
+    session.revision,
+    { advisorMode: "on" },
+    "parent",
+  );
+  assert.equal(override.provenance.advisorMode, "session");
+  assert.equal((await store.readGlobal()).preferences.intensity, "off");
+  assert.deepEqual(double.writes, []);
+  await assert.rejects(
+    store.previewForEdit(defaults.revision, { intensity: "turbo" }),
+    assertStoreError("invalid-change"),
+  );
+});
+
+test("editor revisions reject stale, cross-scope and prior-generation drafts in the store queue", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  const first = await store.readForEdit();
+  const second = await store.readForEdit();
+  const results = await Promise.allSettled([
+    store.saveDefaults({ intensity: "normal" }, first.revision),
+    store.saveDefaults({ advisorMode: "on" }, second.revision),
+  ]);
+  assert.equal(results[0].status, "fulfilled");
+  assert.equal(results[1].status, "rejected");
+  assertStoreError("stale-preferences")(results[1].reason);
+  assert.equal(double.writes.length, 1);
+  assert.equal(
+    (await store.readGlobal()).preferences.advisorMode,
+    "with-delegation",
+  );
+
+  const session = await store.readForEdit("parent");
+  await assert.rejects(
+    store.applySession("other", { intensity: "aggressive" }, session.revision),
+    assertStoreError("stale-preferences"),
+  );
+  await store.saveDefaults({ preference: "efficient" });
+  await assert.rejects(
+    store.applySession("parent", { intensity: "aggressive" }, session.revision),
+    assertStoreError("stale-preferences"),
+  );
+  const current = await store.readForEdit("parent");
+  await store.applySession(
+    "parent",
+    { intensity: "aggressive" },
+    current.revision,
+  );
+  await assert.rejects(
+    store.previewForEdit(current.revision, { advisorMode: "off" }, "parent"),
+    assertStoreError("stale-preferences"),
+  );
+  const fresh = await store.readForEdit();
+  const restarted = new PreferenceStore(double.storage);
+  await assert.rejects(
+    restarted.saveDefaults({ intensity: "off" }, fresh.revision),
+    assertStoreError("stale-preferences"),
+  );
+  assert.equal(
+    (await store.readSession("parent")).preferences.intensity,
+    "aggressive",
+  );
+});
+
 test("corrupt global documents fail closed and are not overwritten", async () => {
   const corruptDocuments = [
     null,

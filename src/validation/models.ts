@@ -3,6 +3,7 @@ import type { Plugin } from "@opencode/plugin";
 import type { EffectivePreferences } from "../state/effective.js";
 import {
   type Intensity,
+  MAX_MODEL_REFERENCE_LENGTH,
   PreferenceStateError,
   type RoleKey,
   type ThinkingSetting,
@@ -572,6 +573,61 @@ function findUniqueModel(
 function hasDuplicateVariantIDs(variants: readonly ThinkingVariant[]): boolean {
   const ids = new Set(variants.map((variant) => variant.id));
   return ids.size !== variants.length;
+}
+
+// The editor receives only identifiers and proven variant names, never provider settings, headers,
+// request bodies or catalogue objects. Reuse the resolver's reader so malformed/ambiguous entries
+// cannot become choices that validation would interpret differently.
+export async function listEditorModels(catalog: ModelCatalog): Promise<
+  readonly {
+    readonly reference: string;
+    readonly variants: readonly string[];
+  }[]
+> {
+  const result = await readCatalog(catalog);
+  if (!result.ok) throw new Error("the model catalogue could not be read");
+  const counts = new Map<string, number>();
+  for (const model of result.models) {
+    const reference = `${model.providerID}/${model.id}`;
+    counts.set(reference, (counts.get(reference) ?? 0) + 1);
+  }
+  return result.models.flatMap((model) => {
+    const reference = `${model.providerID}/${model.id}`;
+    const parsed = parseModelReference(reference);
+    if (
+      !model.enabled ||
+      counts.get(reference) !== 1 ||
+      hasDuplicateVariantIDs(model.variants) ||
+      reference.length > MAX_MODEL_REFERENCE_LENGTH ||
+      /[\s\p{Cc}]/u.test(reference) ||
+      !reference.isWellFormed() ||
+      parsed?.providerID !== model.providerID ||
+      parsed.id !== model.id ||
+      parsed.variant !== undefined
+    )
+      return [];
+    const selected = selectThinkingVariant(
+      model,
+      ANY_THINKING_LEVEL,
+      undefined,
+    );
+    return [
+      {
+        reference,
+        variants:
+          selected.ok && selected.selection.kind === "options"
+            ? selected.selection.options
+                .map((option) => option.variant)
+                .filter(
+                  (id) =>
+                    `${reference}#${id}`.length <= MAX_MODEL_REFERENCE_LENGTH &&
+                    id.isWellFormed() &&
+                    !/[\s\p{Cc}]/u.test(id),
+                )
+            : [],
+      },
+    ];
+  });
 }
 
 // A malformed envelope or entry rejects the whole catalogue. The resolver must see every entry

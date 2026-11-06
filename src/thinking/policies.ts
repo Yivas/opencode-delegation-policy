@@ -1,4 +1,5 @@
 import type { ThinkingSetting } from "../state/schema.js";
+import { THINKING_LEVELS, type ThinkingLevel } from "./levels.js";
 import { admitMistralVariant } from "./mistral-admission.js";
 import {
   type ProofSourceScope,
@@ -7,18 +8,9 @@ import {
 } from "./protocols.js";
 import { admitResponsesVariant } from "./responses-admission.js";
 
-// Canonical names, ordered from least to most reasoning. The host has no level field: a
-// variant's level exists only where a public protocol overlay spells it out.
-export const THINKING_LEVELS = Object.freeze([
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const);
-export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+// The host has no level field: a variant's level exists only where a public protocol overlay spells
+// it out. The ordered canonical names are shared with the editor without its importing these tables.
+export { THINKING_LEVELS, type ThinkingLevel } from "./levels.js";
 
 // "unmapped" means a variant's semantics are not proven here (a budget without a Pi translation,
 // an unproven switch, or a contradiction). "unsupported" means every proven variant excludes the

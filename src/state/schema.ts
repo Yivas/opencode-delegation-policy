@@ -105,6 +105,7 @@ export type PreferenceStateErrorCode =
   | "future-document"
   | "invalid-change"
   | "invalid-session-id"
+  | "stale-preferences"
   | "storage-read-failed"
   | "storage-write-failed";
 
