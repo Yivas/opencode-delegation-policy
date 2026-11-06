@@ -3,9 +3,10 @@
 Delegation policy for OpenCode v2, with explicit roles and model selection. It ports the behavior of
 the Pi extension `pi-delegation-policy` 0.25 to the public plugin API of OpenCode `2.2.5`.
 
-**Unreleased and not yet run inside OpenCode.** Every part has local tests against doubles of the
-host API, and none of it has been observed in a real OpenCode host. There is no published package
-and no supported version. Do not load it into an OpenCode setup you depend on.
+**Experimental alpha `0.1.0-alpha.1`; not yet run inside OpenCode.** Every part has local tests
+against doubles of the host API, but loading, permissions, persistence and terminal rendering have
+not been observed in a real host. OpenCode `2.2.5` is the development target, not a supported or
+verified runtime. Use a setup you can recover; publishing this alpha does not establish compatibility.
 
 ## What it does
 
@@ -104,9 +105,36 @@ a queue of at most 64 pending writes. Overflow is dropped and reads stop waiting
 this is a best-effort diagnostic log, not an audit trail. The plugin makes no network calls of its
 own.
 
-## Try it locally
+## Install the alpha
 
-OpenCode loads plugins from local directories listed under `plugins` in `opencode.json(c)`. In a
+OpenCode installs published plugins from its `plugins` configuration; a global `npm install -g`
+is not needed. In the `opencode.json(c)` used by your OpenCode instance, add this exact package
+reference to the existing list, keeping other entries:
+
+```jsonc
+{
+  "plugins": ["opencode-delegation-policy@0.1.0-alpha.1"]
+}
+```
+
+Restart that OpenCode instance and open `/delegate status`, then `/delegate`. Start by checking
+that both dialogs open and the footer appears, without sending a message to a model. If loading
+fails, remove only the new plugin entry and restart. Keep a copy of the configuration before editing
+it; preferences, logs and registered agents may persist after removal. The package is distributed
+under npm's `next` tag, not `latest`; use the exact version above for a reproducible installation.
+The first registry installation needs network access. Model calls are not needed for these initial
+checks, but this does not promise that OpenCode makes no other network requests on startup.
+
+Delegation is initially off and no Advisor is configured. Use `/delegate` to configure global roles
+and Advisors, then restart so OpenCode registers their agents. Changing settings in a session does
+not create an agent. Consultations can make real model calls and incur cost; see Privacy and cost.
+
+A project directory alone does not isolate OpenCode's global storage, service, credentials or other
+plugins. This is an opt-in alpha installation, not a validated sandbox or a verified removal path.
+
+## Build from source
+
+OpenCode also loads local directories listed under `plugins` in `opencode.json(c)`. In a
 throwaway project, `.opencode/opencode.jsonc`:
 
 ```jsonc
@@ -141,8 +169,8 @@ entries.
 To stop loading the plugin, remove only its entry from the project's `plugins` list and restart that
 environment's service. Do not delete unrelated plugin entries or host data. There is no command to
 wipe the plugin's storage, and removing its entry does not promise to erase it. Removal, persistent
-agent cleanup and rollback have not been exercised in a real host. There is no published release to
-roll back to; keep the last verified source commit and rebuild it if a local update fails, without
+agent cleanup and rollback have not been exercised in a real host. There is no earlier verified release to
+roll back to. Keep the previous configuration and a known source commit or package, without
 resetting host storage to make the failure disappear.
 
 ## Limits
@@ -165,9 +193,9 @@ These are known gaps, not settled behavior:
 
 The development target is `@opencode/plugin@2.2.5`, with theme `2.2.5`, OpenTUI core/solid `0.8.0`
 and Solid `1.9.17`, installed as exact development dependencies. Recent checks ran with Node.js
-`24.22.1` and npm `11.21.1`. The pinned `@opentui/core@0.8.0` declares Node.js `>=26.4.0` or Bun
-`>=1.3.14`; npm reports an engine warning under Node 24. The local checks use its types, not
-its terminal runtime, and do not establish runtime compatibility under Node 24.
+`26.13.0` and npm `11.21.1`. The pinned `@opentui/core@0.8.0` declares Node.js `>=26.4.0` or Bun
+`>=1.3.14`. The local checks use its types, not its terminal runtime. Updating the development
+machine's Node or Bun does not qualify or replace the runtime embedded in OpenCode.
 
 ```bash
 npm ci --ignore-scripts

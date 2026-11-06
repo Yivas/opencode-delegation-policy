@@ -1,8 +1,36 @@
 {
   "name": "opencode-delegation-policy",
-  "private": true,
+  "version": "0.1.0-alpha.1",
   "description": "Delegation policy for OpenCode v2, with explicit roles and model selection.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Yivas/opencode-delegation-policy.git"
+  },
+  "homepage": "https://github.com/Yivas/opencode-delegation-policy#readme",
+  "bugs": {
+    "url": "https://github.com/Yivas/opencode-delegation-policy/issues"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "delegation",
+    "agents"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "tag": "next",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
