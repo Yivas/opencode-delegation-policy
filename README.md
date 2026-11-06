@@ -145,8 +145,9 @@ These are known gaps, not settled behavior:
   runtime, which has not been checked.
 - Agents left over from an earlier configuration are reported, not removed.
 - The notice resets when OpenCode restarts, so a change made while it was stopped is not announced.
-- Pi's `consult_advisor` tool is not built. Consultations use OpenCode's own `subagent` tool; the
-  development baseline update does not introduce another launcher.
+- Pi's `consult_advisor` tool is out of scope. Consulting several Advisors at once would make the
+  plugin launch, wait for and merge model calls itself; consultations use OpenCode's own
+  `subagent` tool instead.
 
 ## Development
 
