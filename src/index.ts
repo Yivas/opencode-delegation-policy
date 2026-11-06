@@ -2,6 +2,7 @@ import type { Plugin } from "@opencode/plugin";
 
 import { delegateArguments, runDelegate } from "./command/delegate.js";
 import { createPreferenceEditor } from "./editor/server.js";
+import { footerState } from "./footer-state.js";
 import { createLocalLog } from "./log/local-log.js";
 import { createPolicyInjector } from "./policy/inject.js";
 import { watchTurns } from "./policy/turns.js";
@@ -59,7 +60,18 @@ const delegationPolicy: Plugin.Plugin = {
           () => false,
         ),
     };
-    let rpcRegistration: { dispose: () => Promise<void> } | undefined;
+    let rpcRegistration:
+      | Awaited<ReturnType<typeof context.rpc.register<typeof delegateRpc>>>
+      | undefined;
+    // Tells footers to read again. The event carries no state and may be missed; the footer also
+    // reads on its own period, so a failed emit is not an error worth surfacing.
+    const announceChange = () => {
+      try {
+        rpcRegistration?.events.emit("changed", {}).catch(() => {});
+      } catch {
+        // A host without RPC events still answers the call; the footer reads on its own period.
+      }
+    };
     let hookRegistration: { dispose: () => Promise<void> } | undefined;
     // Listens for turns that finished successfully, which consume a configuration notice. It only
     // reads the host's public event stream and stops with the plugin.
@@ -105,7 +117,28 @@ const delegationPolicy: Plugin.Plugin = {
       rpcRegistration = await context.rpc.register(delegateRpc, {
         editorRead: (input) => editor.read(input),
         editorPreview: (input) => editor.preview(input),
-        editorApply: (input) => editor.apply(input),
+        editorApply: async (input) => {
+          try {
+            return await editor.apply(input);
+          } finally {
+            announceChange();
+          }
+        },
+        footer: async (input) => {
+          const { sessionID } = (input ?? {}) as { sessionID?: unknown };
+          return footerState(
+            {
+              store: wiring.store,
+              catalog: context.model,
+              agents: () => wiring.agents(),
+              parentOf: async (id) =>
+                (await context.session.get({ sessionID: id })).parentID,
+            },
+            typeof sessionID === "string" && sessionID !== ""
+              ? sessionID
+              : undefined,
+          );
+        },
         run: async (input) => {
           // The host checks the input against the contract before this runs, so anything else is a
           // defect and fails loudly instead of being read as an empty command.
@@ -116,13 +149,17 @@ const delegationPolicy: Plugin.Plugin = {
           if (typeof line !== "string") {
             throw new TypeError("the delegate request carries no line");
           }
-          return {
-            text: await runDelegate(delegateArguments(line), delegatePorts, {
-              ...(typeof sessionID === "string" && sessionID !== ""
-                ? { sessionID }
-                : {}),
-            }),
-          };
+          try {
+            return {
+              text: await runDelegate(delegateArguments(line), delegatePorts, {
+                ...(typeof sessionID === "string" && sessionID !== ""
+                  ? { sessionID }
+                  : {}),
+              }),
+            };
+          } finally {
+            announceChange();
+          }
         },
       });
       hookRegistration = await context.session.hook("context", (request) =>

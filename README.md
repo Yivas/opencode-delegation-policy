@@ -63,6 +63,14 @@ coordinate one server instance; they do not provide compare-and-swap across sepa
 | `/delegate defaults advisors <provider/model ...\|off\|unset>` | One to three Advisors, in order |
 | `/delegate log` | Newest entries of the local log |
 
+The prompt footer shows the effective state of the open session, or of the defaults on the home
+screen, next to the host's own footer content: `D:OFF`, `D:NORM`, `D:AGG`, `D:ORCH` or `D:ERR`, and
+`A:OFF`, `A:ON`, `A:PART` or `A:ERR`. It reads the server again when settings change and every 30
+seconds. A change clears the label until the new state arrives. A read that takes more than 10
+seconds shows `D:? A:?`, and its late answer is dropped, so a label on screen describes a read
+started at most about 40 seconds earlier. In a delegated
+child session it shows `D:OFF A:OFF`, because children never receive the policy.
+
 Agents are created when OpenCode starts, from the defaults, so a change to roles, Advisors or
 thinking needs a restart. A session can change intensity, Advisor mode and preference; it cannot
 create an agent. As in Pi, each of Small, Medium and Large must be configured or turned `off` before
@@ -108,7 +116,10 @@ throwaway project, `.opencode/opencode.jsonc`:
 ```
 
 Build first with `npm ci --ignore-scripts` and `npm run build`. The emitted code imports nothing from
-the host at runtime. A throwaway project alone does not isolate OpenCode's global configuration,
+the host at runtime, except the footer view, which imports Solid and OpenTUI and is loaded on its own
+after `/delegate` is registered. To turn the footer off, list the plugin as
+`{ "package": "/path/to/opencode-delegation-policy", "options": { "footer": false } }`; that the host
+passes these options to the terminal entry is typed, not observed. A throwaway project alone does not isolate OpenCode's global configuration,
 storage or service: use a separate disposable host environment, without personal sessions or
 credentials. Restart only that environment's service, configure the defaults with `/delegate
 defaults ...`, and restart again so the agents exist. `opencode debug agents` lists them.
@@ -141,8 +152,9 @@ These are known gaps, not settled behavior:
 - Nothing here has run in OpenCode: loading the terminal entry, the dialog and its connection to
   the server, the agent list format, injection order, launches with `#variant`, the Advisor's deny
   list and the notice are all unverified.
-- The status line `D:/A:` in the prompt footer is not built: it needs OpenCode's terminal UI library at
-  runtime, which has not been checked.
+- The `D:/A:` footer status relies on OpenCode rewriting the plugin's Solid and OpenTUI imports to
+  its own copies when it loads the terminal entry. That is how the host's source sets it up, but it has
+  not been observed. If the view cannot load, the footer stays as the host draws it.
 - Agents left over from an earlier configuration are reported, not removed.
 - The notice resets when OpenCode restarts, so a change made while it was stopped is not announced.
 - Pi's `consult_advisor` tool is out of scope. Consulting several Advisors at once would make the

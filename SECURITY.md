@@ -40,7 +40,8 @@ host binary.
 [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249) remains, with related
 moderate Glob findings. `@opencode/util@2.2.5`, a dependency of the SDK, pins Minimatch `10.2.5`; the
 fix is in `11.0.1`, a major version outside that pin. The affected packages are development-only:
-`npm audit --omit=dev` reports none. The emitted plugin imports nothing from the SDK, the SDK peer is
+`npm audit --omit=dev` reports none. The emitted plugin imports nothing from the SDK (the footer view imports only Solid and OpenTUI,
+which the host provides), the SDK peer is
 marked optional so installing the plugin does not pull it in, and this project passes no glob patterns
 to these packages. No override is applied, because forcing Minimatch 11 under the SDK could break it.
 This is reviewed when the SDK is updated, if a high or critical advisory appears, if the code starts

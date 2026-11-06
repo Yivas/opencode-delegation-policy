@@ -1,10 +1,12 @@
 import type { Plugin } from "@opencode/plugin/tui";
+import type { JSX } from "@opentui/solid";
 
 import {
   type EditorClient,
   type EditorDialogs,
   runPreferenceEditor,
 } from "./editor/client.js";
+import type { FooterPorts } from "./footer.js";
 import { delegateRpc } from "./rpc.js";
 import { chooseDelegateLine, type SelectorDialogs } from "./selector.js";
 
@@ -180,43 +182,120 @@ export async function runDelegateInTui(
   await ports.alert({ title: TITLE, message });
 }
 
+type FooterRender = (
+  ports: FooterPorts,
+) => (input: { readonly sessionID?: string | undefined }) => JSX.Element;
+
+type FooterHost = {
+  // `false` turns the footer off from the plugin's options; anything else leaves it on.
+  readonly enabled?: boolean;
+  readonly slot?: Plugin.Context["ui"]["slot"];
+  readonly ports: FooterPorts;
+};
+
+// Adds the D/A status beside the host's prompt footer, without replacing it. The view is loaded
+// after setup so that a host where it cannot load keeps every other part of the plugin working; the
+// failure leaves the footer as the host drew it. Returns the cleanup, which also stops a load still
+// in flight from claiming the slot.
+export function registerFooter(
+  host: FooterHost,
+  load: () => Promise<{ readonly footerRender: FooterRender }> = () =>
+    import("./footer-view.js"),
+): () => void {
+  const slot = host.slot;
+  if (host.enabled === false || typeof slot !== "function") return () => {};
+  let disposed = false;
+  let release: (() => void) | undefined;
+  load().then(
+    ({ footerRender }) => {
+      if (disposed) return;
+      try {
+        release = slot({
+          append: "prompt.footer.status",
+          render: footerRender(host.ports),
+        });
+      } catch {
+        // A host that refuses the claim keeps its own footer; nothing else depends on it.
+      }
+    },
+    () => {
+      // Nothing to show: the host's own footer stays as it is.
+    },
+  );
+  return () => {
+    disposed = true;
+    release?.();
+    release = undefined;
+  };
+}
+
 const plugin: Plugin.Definition = {
   id: "opencode-delegation-policy",
   setup(context) {
-    context.keymap.layer(() => ({
-      commands: [
-        {
-          id: "opencode-delegation-policy.delegate",
-          title: "Delegation settings",
-          group: "Delegation",
-          // Keeps the typed line in the prompt and hands it to `run` raw.
-          slash: { name: "delegate", arguments: true },
-          run: (input) =>
-            runDelegateInTui(input, {
-              rpc: (definition) => context.client.rpc(definition),
-              alert: (options) => context.ui.dialog.alert(options),
-              dialogs: {
-                select: (options) => context.ui.dialog.select(options),
-                prompt: (options) => context.ui.dialog.prompt(options),
-                confirm: (options) => context.ui.dialog.confirm(options),
-              },
-              editor: {
-                read: (input) =>
-                  context.client.rpc(delegateRpc).editorRead(input),
-                preview: (input) =>
-                  context.client.rpc(delegateRpc).editorPreview(input),
-                apply: (input) =>
-                  context.client.rpc(delegateRpc).editorApply(input),
-              },
-              sessionID: () => {
-                const route = context.ui.router.current();
-                return route.type === "session" ? route.sessionID : undefined;
-              },
-            }),
+    registerDelegateCommand(context);
+    // The footer is the only part that loads the host's terminal runtime. It is loaded on its own,
+    // after `/delegate` is registered, so a failure there cannot take the command with it, and the
+    // option `"footer": false` turns it off entirely.
+    return registerFooter({
+      enabled: context.options?.footer !== false,
+      slot: context.ui?.slot?.bind(context.ui),
+      ports: {
+        read: (sessionID) =>
+          context.client
+            .rpc(delegateRpc)
+            .footer(sessionID === undefined ? {} : { sessionID }),
+        changed: (handler) =>
+          context.client.rpc(delegateRpc).events.on("changed", () => handler()),
+        every: (milliseconds, handler) => {
+          const timer = setInterval(handler, milliseconds);
+          // A status refresh must never be what keeps the terminal process alive.
+          (timer as { unref?: () => void }).unref?.();
+          return () => clearInterval(timer);
         },
-      ],
-    }));
+        after: (milliseconds, handler) => {
+          const timer = setTimeout(handler, milliseconds);
+          (timer as { unref?: () => void }).unref?.();
+          return () => clearTimeout(timer);
+        },
+      },
+    });
   },
 };
+
+function registerDelegateCommand(context: Plugin.Context): void {
+  context.keymap.layer(() => ({
+    commands: [
+      {
+        id: "opencode-delegation-policy.delegate",
+        title: "Delegation settings",
+        group: "Delegation",
+        // Keeps the typed line in the prompt and hands it to `run` raw.
+        slash: { name: "delegate", arguments: true },
+        run: (input) =>
+          runDelegateInTui(input, {
+            rpc: (definition) => context.client.rpc(definition),
+            alert: (options) => context.ui.dialog.alert(options),
+            dialogs: {
+              select: (options) => context.ui.dialog.select(options),
+              prompt: (options) => context.ui.dialog.prompt(options),
+              confirm: (options) => context.ui.dialog.confirm(options),
+            },
+            editor: {
+              read: (input) =>
+                context.client.rpc(delegateRpc).editorRead(input),
+              preview: (input) =>
+                context.client.rpc(delegateRpc).editorPreview(input),
+              apply: (input) =>
+                context.client.rpc(delegateRpc).editorApply(input),
+            },
+            sessionID: () => {
+              const route = context.ui.router.current();
+              return route.type === "session" ? route.sessionID : undefined;
+            },
+          }),
+      },
+    ],
+  }));
+}
 
 export default plugin;

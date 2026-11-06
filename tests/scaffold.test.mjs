@@ -45,6 +45,8 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
     agents: new Map(),
     effectiveAgents: [],
     rpcs: [],
+    emitted: [],
+    parents: new Map(),
     hooks: [],
     events: [],
     subscriptions: 0,
@@ -183,7 +185,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
       };
     },
     async get({ sessionID }) {
-      return { id: sessionID };
+      return { id: sessionID, parentID: state.parents.get(sessionID) };
     },
   };
   const rpc = {
@@ -194,6 +196,11 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
       return {
         dispose: async () => {
           state.rpcs = state.rpcs.filter((candidate) => candidate !== entry);
+        },
+        events: {
+          emit: async (name, data) => {
+            state.emitted.push([name, data]);
+          },
         },
       };
     },
@@ -375,6 +382,50 @@ test("the server answers the TUI's request with the command's report", async () 
   assert.match(status.text, /Agent check: nothing to report/);
   // The host checks the input against the contract; a request that slipped past is a defect.
   await assert.rejects(handlers.run({}), TypeError);
+});
+
+test("the footer RPC reports the effective axes and changes tell footers to read again", async () => {
+  const { context, state } = setupContext([eligible()]);
+  const cleanup = await delegationPolicy.setup(context);
+  try {
+    const { handlers } = state.rpcs[0];
+    assert.deepEqual(await handlers.footer({}), {
+      delegation: "OFF",
+      advisor: "OFF",
+    });
+
+    await handlers.run({ line: "defaults advisor-mode on" });
+    assert.deepEqual(state.emitted.at(-1), ["changed", {}]);
+    // On, with no Advisor configured: the axis is in error, and the footer says so.
+    assert.deepEqual(await handlers.footer({}), {
+      delegation: "OFF",
+      advisor: "ERR",
+    });
+
+    // A delegated child never receives the policy, whatever the settings.
+    state.parents.set("child", "root");
+    assert.deepEqual(await handlers.footer({ sessionID: "child" }), {
+      delegation: "OFF",
+      advisor: "OFF",
+    });
+
+    const emittedBefore = state.emitted.length;
+    const snapshot = await handlers.editorRead({ scope: "defaults" });
+    await handlers.editorApply({
+      scope: "defaults",
+      revision: snapshot.revision,
+      change: { advisorMode: "off" },
+    });
+    assert.equal(state.emitted.length, emittedBefore + 1);
+
+    state.records.set("preferences.v1.global", "{not json");
+    assert.deepEqual(await handlers.footer({}), {
+      delegation: "ERR",
+      advisor: "ERR",
+    });
+  } finally {
+    await cleanup();
+  }
 });
 
 test("the registered editor RPC previews without writing and rejects an outdated draft", async () => {
