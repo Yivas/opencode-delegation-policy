@@ -1,15 +1,15 @@
 import type { Plugin } from "@opencode/plugin";
 
-import {
-  agentDefinitions,
-  type AgentDefinition,
-  registerAgentDefinitions,
-} from "./agents/register.js";
 import type { AgentPermission } from "./agents/ids.js";
 import {
+  type AgentDefinition,
+  agentDefinitions,
+  registerAgentDefinitions,
+} from "./agents/register.js";
+import {
   type AdvisorSafetyIssue,
-  type EffectiveAgent,
   advisorSafetyIssues,
+  type EffectiveAgent,
   orphanAgentIDs,
 } from "./agents/safety.js";
 import { PreferenceStateError, PreferenceStore } from "./state/store.js";
@@ -41,8 +41,9 @@ export type Wiring = {
   // no longer defines. The caller decides what to do with each result.
   inspect(): Promise<AgentInspection>;
   // The plugin's agents as the host actually has them: defined by this plugin, present in the host's
-  // effective list, and still on the model they were created with. The policy may only name these: a
-  // session can turn delegation on, but it cannot create an agent, and the host's own configuration
+  // effective list, and still on the model they were created with. Advisors must also remain
+  // advice-only under the effective permission rules. The policy may only name these: a session
+  // can turn delegation on, but it cannot create an agent, and the host's own configuration
   // can remove one or change its model after registration.
   agents(): Promise<readonly AgentDefinition[]>;
   dispose(): Promise<void>;
@@ -124,15 +125,21 @@ export function createWiring(ports: HostPorts): Wiring {
 
     async agents() {
       if (!registered) return [];
-      const effective = new Map(
-        effectiveModels(await ports.agentList()).map((agent) => [
-          agent.id,
-          agent.model,
-        ]),
+      const current = definitions();
+      const listed = await ports.agentList();
+      const unsafe = new Set(
+        advisorSafetyIssues({
+          definitions: current,
+          effective: effectiveAgents(listed),
+        }).map((issue) => issue.id),
       );
-      return definitions().filter((definition) => {
+      const effective = new Map(
+        effectiveModels(listed).map((agent) => [agent.id, agent.model]),
+      );
+      return current.filter((definition) => {
         const model = effective.get(definition.id);
         return (
+          !unsafe.has(definition.id) &&
           model !== undefined &&
           model.providerID === definition.model.providerID &&
           model.id === definition.model.id
@@ -207,14 +214,19 @@ function effectiveAgents(listed: unknown): readonly EffectiveAgent[] {
     if (typeof id !== "string" || !Array.isArray(permissions)) continue;
     const rules: AgentPermission[] = [];
     for (const rule of permissions) {
-      if (!isRecord(rule)) continue;
+      if (!isRecord(rule)) {
+        rules.length = 0;
+        break;
+      }
       const { action, resource, effect } = rule;
       if (
         typeof action !== "string" ||
         typeof resource !== "string" ||
         (effect !== "allow" && effect !== "deny" && effect !== "ask")
       ) {
-        continue;
+        // An unreadable rule could reopen an action; no partial list proves advice-only safety.
+        rules.length = 0;
+        break;
       }
       rules.push({ action, resource, effect });
     }

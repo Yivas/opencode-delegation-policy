@@ -11,8 +11,10 @@ and no supported version. Do not load it into an OpenCode setup you depend on.
 
 The plugin registers helper agents for the roles the defaults configure, `ocv2-small`, `ocv2-medium`,
 `ocv2-large` and `ocv2-visual-design`, and up to three Advisors, `ocv2-advisor-1` to
-`ocv2-advisor-3`, each on its exact model. Advisors carry a deny-everything permission list, so they
-give advice and run no tools.
+`ocv2-advisor-3`, each on its exact model. Advisors carry a deny-everything permission list. If the
+host's effective rules reopen an action or cannot be read, that Advisor is excluded from the policy
+and reported in status. This does not change the host's permissions or prevent a separate manual
+launch; the actual denial of tools still needs a host test.
 
 On each request of the main agent in a root session it adds a `<delegation_policy>` block to the
 system instructions. The block follows Pi's text: the intensity rule, Visual Design's four

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { createPolicyInjector } from "../dist/policy/inject.js";
 import { createWiring } from "../dist/setup.js";
 
 // Storage double with the ctx.storage surface: the store reads and writes JSON documents.
@@ -189,6 +190,62 @@ test("the agents the policy may name are the ones the host lists, on their regis
     },
   ];
   assert.deepEqual(await wiring.agents(), []);
+});
+
+test("the policy excludes an advisor whose effective permissions are no longer advice-only", async () => {
+  const records = new Map();
+  storagedefaults(
+    records,
+    defaults({
+      advisors: {
+        kind: "configured",
+        models: ["acme/advisor-model", "acme/advisor-model"],
+      },
+    }),
+  );
+  const agent = transformDouble();
+  const wiring = createWiring({
+    storage: storageDouble(records),
+    catalog: catalogDouble([
+      model("acme", "small-model"),
+      model("acme", "advisor-model"),
+    ]),
+    agentTransform: agent.transform,
+    agentList: async () => ({ data: [...agent.agents.values()] }),
+  });
+  await wiring.register();
+  agent.rebuild();
+  const injector = createPolicyInjector({
+    store: wiring.store,
+    catalog: catalogDouble([
+      model("acme", "small-model"),
+      model("acme", "advisor-model"),
+    ]),
+    agents: () => wiring.agents(),
+    session: async () => ({}),
+  });
+  const advisor = agent.agents.get("ocv2-advisor-1");
+  const denied = advisor.permissions;
+  for (const permissions of [
+    [...denied, { action: "shell", resource: "*", effect: "allow" }],
+    [...denied, { action: "read", resource: "a-file", effect: "ask" }],
+    undefined,
+    [...denied, { action: "shell", resource: "*", effect: "unknown" }],
+  ]) {
+    advisor.permissions = permissions;
+    assert.deepEqual((await wiring.agents()).map((entry) => entry.id).sort(), [
+      "ocv2-advisor-2",
+      "ocv2-small",
+    ]);
+    const system = [];
+    await injector.apply({ sessionID: "root", agent: "build", system });
+    assert.match(system[0].text, /agent "ocv2-advisor-2"/);
+    assert.doesNotMatch(system[0].text, /ocv2-advisor-1/);
+    // This is a policy eligibility check, never an edit of the host's effective rules.
+    assert.equal(advisor.permissions, permissions);
+  }
+  advisor.permissions = denied;
+  assert.equal((await wiring.agents()).length, 3);
 });
 
 test("a broken advisor model does not stop the roles from registering", async () => {
