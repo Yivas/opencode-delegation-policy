@@ -27,7 +27,12 @@ type Overlay = Readonly<Record<string, unknown>>;
 
 export type TransportKind = "native" | "budget" | "binary";
 // Describes the evidence producer, not provider ownership or runtime wire compatibility.
-export type ProofSourceScope = "native-fields" | "pi-model-recipe";
+// "host-translation": the host forwards these overlay controls unchanged to an upstream it does not
+// identify here. It proves what the request says, never that the upstream model supports it.
+export type ProofSourceScope =
+  | "native-fields"
+  | "pi-model-recipe"
+  | "host-translation";
 
 export type ContractProof = {
   readonly sourceScope: ProofSourceScope;

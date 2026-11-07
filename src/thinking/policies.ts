@@ -1,6 +1,7 @@
 import type { ThinkingSetting } from "../state/schema.js";
 import { THINKING_LEVELS, type ThinkingLevel } from "./levels.js";
 import { admitMistralVariant } from "./mistral-admission.js";
+import { admitOpenRouterVariant } from "./openrouter-admission.js";
 import {
   type ProofSourceScope,
   recognizeVariantProof,
@@ -297,6 +298,27 @@ function selectedProof(
       ok: true,
       proof: admission.proof,
       unsupportedLevels: admission.unsupportedLevels,
+    };
+  }
+
+  // OpenRouter's proof is the host's own translation, so a control it cannot read as a level leaves
+  // the variant unproven rather than unsupported: a budget or a toggle-on may still mean a level.
+  const openrouterAdmission = admitOpenRouterVariant(model, variant);
+  if (openrouterAdmission.kind === "unresolved") {
+    return { ok: false, code: "thinking-identity-unresolved" };
+  }
+  if (openrouterAdmission.kind === "unproven-controls") {
+    return {
+      ok: false,
+      code: "thinking-variant-unproven",
+      unsupportedLevels: openrouterAdmission.unsupportedLevels,
+    };
+  }
+  if (openrouterAdmission.kind === "matched") {
+    return {
+      ok: true,
+      proof: openrouterAdmission.proof,
+      unsupportedLevels: openrouterAdmission.unsupportedLevels,
     };
   }
   if (
