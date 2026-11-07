@@ -2,16 +2,17 @@ import {
   ADVISOR_DENIED_ACTIONS,
   type AgentPermission,
   isAdvisorAgentID,
+  isAdvisorReadAction,
   reservedAgentIDs,
 } from "./ids.js";
 import type { AgentDefinition } from "./register.js";
 
 // The host applies `opencode.config.agent` after the plugin's transform and the last matching
 // permission rule wins, so the user's own configuration can append an `allow` after the advisor's
-// deny-all and re-enable execution. Nothing can prevent that from inside the transform; the only
-// safe answer is to read the effective agents afterwards and refuse to consult an advisor that
-// stopped being advice-only. This module is that check, and it is pure so the caller decides what
-// to do with the result.
+// rules and re-enable execution. Nothing can prevent that from inside the transform; the only safe
+// answer is to read the effective agents afterwards and refuse to consult an advisor that stopped
+// being read-only. This module is that check, and it is pure so the caller decides what to do with
+// the result.
 
 export type EffectiveAgent = {
   readonly id: string;
@@ -26,9 +27,10 @@ export type AdvisorSafetyIssue =
       readonly actions: readonly string[];
     };
 
-// An advisor is safe only while every action still resolves to deny after the whole rule list is
-// applied. Anything that leaves part of an action's space open is reported: a later `allow` for one
-// resource, an `ask`, or no matching rule at all.
+// An advisor is safe only while every action outside the read set still resolves to deny after the
+// whole rule list is applied. Anything that leaves part of such an action's space open is reported:
+// a later `allow` for one resource, an `ask`, or no matching rule at all. A rule that narrows one of
+// the read actions is not reported: it can only take reading away, never grant anything else.
 export function advisorSafetyIssues(input: {
   readonly definitions: readonly AgentDefinition[];
   readonly effective: readonly EffectiveAgent[];
@@ -69,16 +71,18 @@ export function orphanAgentIDs(input: {
     .sort();
 }
 
-// Which actions are not closed once the documented matcher runs. For one action, a rule with the
-// wildcard resource decides the whole resource space; a narrower deny removes nothing, and a
-// narrower `allow` or `ask` opens the part of the space it names. So an action is safe only when
-// the last rule that can affect any of its resources leaves it closed by a wildcard deny.
+// Which actions are not closed once the documented matcher runs. The read actions are left out: the
+// profile allows them on every resource, and a rule that narrows one of them cannot grant anything
+// else. For the rest, a rule with the wildcard resource decides the whole resource space; a narrower
+// deny removes nothing, and a narrower `allow` or `ask` opens the part of the space it names. So an
+// action is safe only when the last rule that can affect any of its resources leaves it closed by a
+// wildcard deny.
 export function actionsNotDenied(
   rules: readonly AgentPermission[],
 ): readonly string[] {
   const candidates = new Set<string>([...ADVISOR_DENIED_ACTIONS, "*"]);
   for (const rule of rules) {
-    candidates.add(rule.action);
+    if (!isAdvisorReadAction(rule.action)) candidates.add(rule.action);
   }
   const open: string[] = [];
   for (const action of candidates) {

@@ -37,12 +37,12 @@ export type Wiring = {
   // in error keeps its previous agents instead of taking them away.
   register(): Promise<void>;
   // Reads the effective agents after the host applied its own configuration. Reports an advisor that
-  // stopped being advice-only and any agent under the plugin's prefix that the current configuration
+  // stopped being read-only and any agent under the plugin's prefix that the current configuration
   // no longer defines. The caller decides what to do with each result.
   inspect(): Promise<AgentInspection>;
   // The plugin's agents as the host actually has them: defined by this plugin, present in the host's
   // effective list, and still on the model they were created with. Advisors must also remain
-  // advice-only under the effective permission rules. The policy may only name these: a session
+  // read-only under the effective permission rules. The policy may only name these: a session
   // can turn delegation on, but it cannot create an agent, and the host's own configuration
   // can remove one or change its model after registration.
   agents(): Promise<readonly AgentDefinition[]>;
@@ -224,7 +224,7 @@ function effectiveAgents(listed: unknown): readonly EffectiveAgent[] {
         typeof resource !== "string" ||
         (effect !== "allow" && effect !== "deny" && effect !== "ask")
       ) {
-        // An unreadable rule could reopen an action; no partial list proves advice-only safety.
+        // An unreadable rule could reopen an action; no partial list proves read-only safety.
         rules.length = 0;
         break;
       }

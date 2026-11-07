@@ -61,8 +61,9 @@ function advisor(entry, providerID, id, extra = {}) {
   };
 }
 
+// The actions the built-in tools of OpenCode 2.2.6 ask for, minus the read ones. Kept as a literal
+// here so the profile is checked against the host's action names rather than against itself.
 const ADVISOR_DENIED_ACTIONS = [
-  "read",
   "edit",
   "shell",
   "execute",
@@ -71,7 +72,9 @@ const ADVISOR_DENIED_ACTIONS = [
   "webfetch",
   "websearch",
   "external_directory",
+  "question",
 ];
+const ADVISOR_READ_ACTIONS = ["read", "glob", "grep"];
 
 test("an enabled role becomes a subagent with its exact model and a scope instruction", () => {
   const definitions = agentDefinitions({
@@ -143,7 +146,7 @@ test("a variant is registered only when the configuration leaves one choice", ()
   );
 });
 
-test("each advisor is registered under its own number with every action denied", () => {
+test("each advisor is registered under its own number with read-only tools", () => {
   const definitions = agentDefinitions({
     roles: [],
     advisors: [
@@ -173,13 +176,18 @@ test("each advisor is registered under its own number with every action denied",
   for (const definition of definitions) {
     assert.equal(definition.mode, "subagent");
     assert.match(definition.system, /advice only/);
-    // Every known action is denied explicitly and the wildcard comes last, because an action no
-    // rule matches falls back to "ask" rather than "deny".
-    assert.deepEqual(definition.permissions.at(-1), {
-      action: "*",
-      resource: "*",
-      effect: "deny",
-    });
+    // The read allows come last: an earlier rule would be overridden by the wildcard deny that
+    // closes every other action, because the last matching rule wins.
+    assert.deepEqual(
+      definition.permissions.slice(-ADVISOR_READ_ACTIONS.length),
+      [
+        { action: "read", resource: "*", effect: "allow" },
+        { action: "glob", resource: "*", effect: "allow" },
+        { action: "grep", resource: "*", effect: "allow" },
+      ],
+    );
+    // Every other action is denied explicitly, and the wildcard deny covers what the host or
+    // another extension adds, including MCP tools named `<server>_<tool>`.
     for (const action of ADVISOR_DENIED_ACTIONS) {
       assert.ok(
         definition.permissions.some(
@@ -188,6 +196,22 @@ test("each advisor is registered under its own number with every action denied",
         action,
       );
     }
+    assert.ok(
+      definition.permissions.some(
+        (rule) =>
+          rule.action === "*" &&
+          rule.resource === "*" &&
+          rule.effect === "deny",
+      ),
+    );
+    // Reading is the whole of the advisor's authority.
+    assert.deepEqual(
+      definition.permissions
+        .filter((rule) => rule.effect === "allow")
+        .map((rule) => rule.action)
+        .sort(),
+      [...ADVISOR_READ_ACTIONS].sort(),
+    );
   }
   assert.equal(advisorAgentID(2), "ocv2-advisor-2");
   // The same shape decides whether a definition is an advisor, so an id cannot be built one way and
@@ -219,9 +243,9 @@ test("registering writes every defined field on the reserved ids", () => {
   assert.equal(agents.get("ocv2-small")?.model.id, "small-model");
   assert.equal(agents.get("ocv2-small")?.mode, "subagent");
   assert.deepEqual(agents.get("ocv2-advisor-1")?.permissions.at(-1), {
-    action: "*",
+    action: "grep",
     resource: "*",
-    effect: "deny",
+    effect: "allow",
   });
 });
 
@@ -360,7 +384,7 @@ test("applying a definition without a permission list leaves the host rules alon
   assert.equal(agent.hidden, false);
 });
 
-test("applying an advisor definition replaces any existing rules with the deny list", () => {
+test("applying an advisor definition replaces any existing rules with its own list", () => {
   const agent = {
     name: "stale",
     description: "stale",
@@ -392,6 +416,13 @@ test("applying an advisor definition replaces any existing rules with the deny l
   });
 });
 
+const ADVISOR_PROFILE = [
+  { action: "*", resource: "*", effect: "deny" },
+  { action: "read", resource: "*", effect: "allow" },
+  { action: "glob", resource: "*", effect: "allow" },
+  { action: "grep", resource: "*", effect: "allow" },
+];
+
 function advisorDefinition(id) {
   return {
     id,
@@ -400,92 +431,114 @@ function advisorDefinition(id) {
     system: "Advise.",
     mode: "subagent",
     model: { providerID: "acme", id: "model" },
-    permissions: [
-      { action: "read", resource: "*", effect: "deny" },
-      { action: "*", resource: "*", effect: "deny" },
-    ],
+    permissions: ADVISOR_PROFILE,
   };
 }
 
-test("an advisor whose rules still deny everything raises no issue", () => {
-  const issues = advisorSafetyIssues({
-    definitions: [advisorDefinition("ocv2-advisor-1")],
-    effective: [
-      {
-        id: "ocv2-advisor-1",
-        permissions: [
-          { action: "*", resource: "*", effect: "allow" },
-          { action: "read", resource: "*", effect: "deny" },
-          { action: "*", resource: "*", effect: "deny" },
-        ],
-      },
-    ],
+function advisorIssues(permissions) {
+  const id = "ocv2-advisor-1";
+  return advisorSafetyIssues({
+    definitions: [advisorDefinition(id)],
+    effective: [{ id, permissions }],
   });
+}
 
-  assert.deepEqual(issues, []);
+test("an advisor with the read-only profile raises no issue", () => {
+  assert.deepEqual(advisorIssues(ADVISOR_PROFILE), []);
+  // The host's own base rules and any global config rules can sit before the profile: the profile's
+  // wildcard deny and read allows are the last rules that match, so earlier ones grant nothing.
+  assert.deepEqual(
+    advisorIssues([
+      { action: "*", resource: "*", effect: "allow" },
+      { action: "read", resource: "*.env", effect: "ask" },
+      ...ADVISOR_PROFILE,
+    ]),
+    [],
+  );
 });
 
-test("an allow the host config appends after the deny list is reported for that action", () => {
+test("an allow the host config appends after the profile is reported for that action", () => {
   // This is the documented order: config runs after the transform and the last matching rule wins.
-  const issues = advisorSafetyIssues({
-    definitions: [advisorDefinition("ocv2-advisor-1")],
-    effective: [
-      {
-        id: "ocv2-advisor-1",
-        permissions: [
-          { action: "*", resource: "*", effect: "deny" },
-          { action: "shell", resource: "*", effect: "allow" },
-        ],
-      },
-    ],
-  });
+  assert.deepEqual(
+    advisorIssues([
+      ...ADVISOR_PROFILE,
+      { action: "shell", resource: "*", effect: "allow" },
+    ]),
+    [{ kind: "actions-not-denied", id: "ocv2-advisor-1", actions: ["shell"] }],
+  );
+});
 
-  assert.deepEqual(issues, [
-    { kind: "actions-not-denied", id: "ocv2-advisor-1", actions: ["shell"] },
+test("an allow for every action reopens the whole boundary", () => {
+  const [issue] = advisorIssues([
+    ...ADVISOR_PROFILE,
+    { action: "*", resource: "*", effect: "allow" },
   ]);
+
+  assert.equal(issue.kind, "actions-not-denied");
+  for (const action of ["edit", "shell", "subagent", "webfetch", "*"]) {
+    assert.ok(issue.actions.includes(action), action);
+  }
 });
 
 test("a narrower allow still counts as a hole, and ask is not treated as safe", () => {
-  const issues = advisorSafetyIssues({
-    definitions: [advisorDefinition("ocv2-advisor-2")],
-    effective: [
+  assert.deepEqual(
+    advisorIssues([
+      ...ADVISOR_PROFILE,
+      { action: "edit", resource: "src/**", effect: "allow" },
+      { action: "subagent", resource: "*", effect: "ask" },
+    ]),
+    [
       {
-        id: "ocv2-advisor-2",
-        permissions: [
-          { action: "*", resource: "*", effect: "deny" },
-          { action: "read", resource: "src/**", effect: "allow" },
-          { action: "edit", resource: "*", effect: "ask" },
-        ],
+        kind: "actions-not-denied",
+        id: "ocv2-advisor-1",
+        actions: ["edit", "subagent"],
       },
     ],
-  });
+  );
+});
 
-  assert.deepEqual(issues, [
-    {
-      kind: "actions-not-denied",
-      id: "ocv2-advisor-2",
-      actions: ["edit", "read"],
-    },
-  ]);
+test("an action the profile never names is checked too", () => {
+  // An MCP tool asks for `<server>_<tool>`, so the wildcard deny is what closes it; a rule that
+  // names one of those actions still has to leave it closed.
+  assert.deepEqual(
+    advisorIssues([
+      ...ADVISOR_PROFILE,
+      { action: "acme_search", resource: "*", effect: "allow" },
+    ]),
+    [
+      {
+        kind: "actions-not-denied",
+        id: "ocv2-advisor-1",
+        actions: ["acme_search"],
+      },
+    ],
+  );
+});
+
+test("narrowing a read action is not reported", () => {
+  // The check rejects widening, not narrowing: taking reading away cannot grant anything else, and
+  // a user who hides a secret from the advisor should keep it usable.
+  assert.deepEqual(
+    advisorIssues([
+      ...ADVISOR_PROFILE,
+      { action: "read", resource: "*.env", effect: "deny" },
+      { action: "grep", resource: "*", effect: "ask" },
+    ]),
+    [],
+  );
 });
 
 test("a scoped deny does not close the action for the rest of its resources", () => {
   // Replacing the plugin's rules with a narrow deny is exactly the config case this check exists
-  // for: `read` on `*.env` is denied, but every other read is not.
-  const issues = advisorSafetyIssues({
-    definitions: [advisorDefinition("ocv2-advisor-1")],
-    effective: [
-      {
-        id: "ocv2-advisor-1",
-        permissions: [{ action: "read", resource: "*.env", effect: "deny" }],
-      },
-    ],
-  });
+  // for: `edit` on `src/**` is denied, but every other edit is not.
+  const issues = advisorIssues([
+    { action: "edit", resource: "src/**", effect: "deny" },
+  ]);
 
   assert.equal(issues.length, 1);
   const [issue] = issues;
   assert.equal(issue.kind, "actions-not-denied");
-  assert.ok(issue.actions.includes("read"));
+  assert.ok(issue.actions.includes("edit"));
   assert.ok(issue.actions.includes("*"));
 });
 
@@ -518,7 +571,7 @@ test("rules are matched by action with the wildcard, last match winning", () => 
 test("an empty rule list leaves every action unclosed", () => {
   const actions = actionsNotDenied([]);
 
-  assert.ok(actions.includes("read"));
+  assert.ok(actions.includes("edit"));
   assert.ok(actions.includes("*"));
 });
 

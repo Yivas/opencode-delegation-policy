@@ -574,7 +574,7 @@ async function describeAgents(
     lines.push(
       issue.kind === "unregistered"
         ? `Agent check: ${issue.id} is configured but the host does not have it.`
-        : `Agent check: ${issue.id} can still do ${issue.actions.join(", ")}; something re-enabled actions on an agent that must have none.`,
+        : `Agent check: ${issue.id} can still do ${issue.actions.join(", ")}; something re-enabled actions on an agent that may only read.`,
     );
   }
   for (const id of inspection.orphans) {
