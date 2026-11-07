@@ -38,20 +38,23 @@ obligations; it cannot enforce them.
 
 ## Settings
 
-`/delegate` lives in the terminal interface and answers in a dialog. Typed alone, it opens a menu
-with quick commands and an editor for the open session or the defaults. The editor shows value
-origins, filters models from the host catalogue, and keeps changes in a local draft. Preview validates
-without saving; Apply asks for confirmation. Closing a changed draft asks before discarding it.
+`/delegate` lives in the terminal interface and answers in a dialog. Typed alone, it opens one panel
+that lists every setting with its effective value and where that value comes from: intensity, Advisor
+mode, preference, the model and thinking policy of each role, and the Advisors. Choosing a row edits a
+local draft. `Apply to this session` saves intensity, Advisor mode and preference; `Save as defaults`
+saves the whole draft. Both validate the draft first and then save without a second confirmation.
+Models, thinking and Advisors take effect after OpenCode restarts. Closing a changed draft asks before
+discarding it.
 
-A concurrent settings change refuses Apply instead of overwriting the other client's work. Reload
-source settings keeps the draft and takes a fresh revision for another preview. If a save cannot be
-confirmed, the editor keeps the draft but disables Apply until a successful reload. These checks
+A concurrent settings change refuses the save instead of overwriting the other client's work. When a
+save is refused or cannot be confirmed, the panel keeps the draft and offers `Reload`, which reads the
+saved settings again without discarding it; until then the save actions are hidden. These checks
 coordinate one server instance; they do not provide compare-and-swap across separate processes.
 
 | Command | Effect |
 | --- | --- |
-| `/delegate` | Interactive command selector; cancelling sends nothing |
-| `/delegate edit [session\|defaults]` | Open the draft editor; without a scope, use the open session or defaults on the home screen |
+| `/delegate` | Open the settings panel for the open session, or for the defaults on the home screen |
+| `/delegate edit [session\|defaults]` | Open the same panel; `defaults` ignores the open session |
 | `/delegate status` | Settings of the open session, or the defaults on the home screen, with where each value comes from and whether it works |
 | `/delegate <off\|normal\|aggressive\|orchestrator>` | Intensity of the open session |
 | `/delegate advisor <off\|on\|with-delegation>` | Advisor mode of the open session |

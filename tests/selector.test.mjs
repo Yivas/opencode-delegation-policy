@@ -1,177 +1,382 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { chooseDelegateLine } from "../dist/selector.js";
+import { createPreferenceEditor } from "../dist/editor/server.js";
+import { runDelegatePanel } from "../dist/selector.js";
+import { PreferenceStore } from "../dist/state/store.js";
 import { runDelegateInTui } from "../dist/tui.js";
 
-// Dialogs that answer from a script: a select answer is the title of the option to pick (or
-// undefined to cancel), a prompt answer is the text typed. Every dialog shown is recorded.
-function scriptedDialogs(answers) {
+// One value column: the longest label ("Visual Design thinking", 22 characters) plus two spaces.
+const VALUE_COLUMN = 24;
+const ACTIONS = new Set(["apply", "save", "reload", "status", "log", "close"]);
+
+function aligned(label, value) {
+  return label.padEnd(VALUE_COLUMN) + value;
+}
+
+function settingRows(dialog) {
+  return dialog.options
+    .filter((option) => !ACTIONS.has(option.value))
+    .map((option) => option.title);
+}
+
+// The real editor server over a storage double, as the terminal entry wires it: the panel is
+// exercised without a second implementation of the preferences.
+function fixture(answers, confirms = []) {
+  const records = new Map();
+  let writes = 0;
+  let session = "ses_A";
+  const store = new PreferenceStore({
+    async get(key) {
+      return records.has(key) ? JSON.parse(records.get(key)) : undefined;
+    },
+    async set(key, value) {
+      writes += 1;
+      records.set(key, JSON.stringify(value));
+    },
+    async remove(key) {
+      records.delete(key);
+    },
+  });
+  const editor = createPreferenceEditor({
+    store,
+    catalog: {
+      async list() {
+        return {
+          data: [
+            {
+              providerID: "acme",
+              id: "plain",
+              modelID: "plain",
+              enabled: true,
+              limit: { output: 32000 },
+              variants: [],
+            },
+            {
+              providerID: "other",
+              id: "model",
+              modelID: "model",
+              enabled: true,
+              limit: { output: 32000 },
+              variants: [],
+            },
+            {
+              providerID: "openai",
+              id: "gpt-5",
+              modelID: "gpt-5",
+              enabled: true,
+              package: "@opencode/ai/providers/openai",
+              limit: { output: 32000 },
+              variants: [{ id: "deep", settings: { reasoningEffort: "high" } }],
+            },
+          ],
+        };
+      },
+    },
+    sessionExists: async () => true,
+  });
   const shown = [];
-  const next = () => answers.shift();
+  const alerts = [];
+  const runs = [];
+  const calls = [];
+  const dialogs = {
+    async select(input) {
+      shown.push(input);
+      assert.ok(answers.length > 0, `unexpected dialog: ${input.title}`);
+      const answer = answers.shift();
+      if (typeof answer === "function") return answer(input);
+      if (answer !== undefined) {
+        assert.ok(
+          input.options.some(
+            (option) => option.value === answer && !option.disabled,
+          ),
+          `choice ${answer} in ${input.title}`,
+        );
+      }
+      return answer;
+    },
+    async prompt(input) {
+      shown.push(input);
+      return undefined;
+    },
+    async confirm(input) {
+      shown.push(input);
+      const answer = confirms.shift();
+      return typeof answer === "function" ? answer(input) : answer;
+    },
+    async alert(input) {
+      alerts.push(input);
+    },
+  };
+  const client = {
+    async read(input) {
+      calls.push(["read", input]);
+      return editor.read(input);
+    },
+    async preview(input) {
+      calls.push(["preview", structuredClone(input)]);
+      return editor.preview(input);
+    },
+    async apply(input) {
+      calls.push(["apply", structuredClone(input)]);
+      return editor.apply(input);
+    },
+  };
+  const ports = {
+    client,
+    dialogs,
+    sessionID: () => session,
+    run: async (line, target) => {
+      runs.push([line, target.scope]);
+      return `answer to ${line}`;
+    },
+  };
   return {
+    store,
+    client,
+    dialogs,
+    alerts,
     shown,
-    dialogs: {
-      async select({ title, options }) {
-        shown.push({ title, options: options.map((option) => option.title) });
-        const pick = next();
-        return pick === undefined
-          ? undefined
-          : options.find((option) => option.title === pick)?.value;
-      },
-      async prompt({ title }) {
-        shown.push({ title });
-        return next();
-      },
+    calls,
+    runs,
+    ports,
+    sessionID: () => session,
+    switchSession: (value) => {
+      session = value;
+    },
+    writes: () => writes,
+    panel: (scope = { scope: "defaults" }) => runDelegatePanel(scope, ports),
+    assertConsumed() {
+      assert.equal(answers.length, 0);
+      assert.equal(confirms.length, 0);
     },
   };
 }
 
-test("each choice builds the line the grammar already accepts", async () => {
-  const cases = [
-    [["Show status"], true, "status"],
-    [["This session: intensity", "aggressive"], true, "aggressive"],
-    [["This session: Advisor mode", "on"], true, "advisor on"],
-    [
-      ["This session: model preference", "efficient"],
-      true,
-      "preference efficient",
-    ],
-    [["This session: reset"], true, "reset"],
-    [["This session: clear"], true, "clear"],
-    [["Defaults: intensity", "normal"], false, "defaults intensity normal"],
-    [
-      ["Defaults: Advisor mode", "with-delegation"],
-      false,
-      "defaults advisor-mode with-delegation",
-    ],
-    [
-      ["Defaults: role model", "small", " acme/model#high "],
-      false,
-      "defaults role small acme/model#high",
-    ],
-    [
-      ["Defaults: role thinking", "large", "low..high"],
-      false,
-      "defaults thinking large low..high",
-    ],
-    [
-      ["Defaults: Advisors", "acme/a acme/b"],
-      false,
-      "defaults advisors acme/a acme/b",
-    ],
-    [["Show the local log"], false, "log"],
-  ];
-  for (const [answers, sessionOpen, expected] of cases) {
-    const { dialogs } = scriptedDialogs([...answers]);
-    assert.equal(
-      await chooseDelegateLine(dialogs, sessionOpen),
-      expected,
-      answers.join(" > "),
-    );
-  }
-});
+test("the panel lists every setting with its value in one column", async () => {
+  const f = fixture(["close"]);
+  await f.store.saveDefaults({
+    intensity: "normal",
+    roles: { small: { kind: "configured", model: "acme/plain" } },
+    thinking: { small: { kind: "fixed", level: "high" } },
+    advisors: { kind: "configured", models: ["other/model"] },
+  });
 
-test("session choices are only offered with a session open", async () => {
-  const { dialogs, shown } = scriptedDialogs([undefined]);
+  await f.panel();
+  f.assertConsumed();
 
-  await chooseDelegateLine(dialogs, false);
-
-  assert.equal(
-    shown[0].options.some((title) => title.startsWith("This session")),
-    false,
+  const main = f.shown[0];
+  assert.equal(main.title, "Delegation · defaults");
+  assert.deepEqual(settingRows(main), [
+    aligned("Intensity", "normal"),
+    aligned("Advisor mode", "with-delegation"),
+    aligned("Preference", "standard"),
+    aligned("Small", "acme/plain"),
+    aligned("Small thinking", "high"),
+    aligned("Medium", "not set"),
+    aligned("Large", "not set"),
+    aligned("Visual Design", "not set"),
+    aligned("Advisor 1", "other/model"),
+    aligned("Advisor 2", "add"),
+  ]);
+  // Where each value comes from belongs to the row, not to the panel title.
+  assert.deepEqual(
+    main.options
+      .filter((option) => !ACTIONS.has(option.value))
+      .map((option) => option.footer),
+    Array.from({ length: 10 }, () => "defaults"),
   );
 });
 
-test("cancelling at any step, or typing nothing usable, builds nothing", async () => {
-  for (const answers of [
-    [undefined],
-    ["This session: intensity", undefined],
-    ["Defaults: role model", undefined],
-    ["Defaults: role model", "small", undefined],
-    ["Defaults: role model", "small", "   "],
-    // A model with a space would split into two words and change meaning.
-    ["Defaults: role model", "small", "acme/a acme/b"],
-    ["Defaults: Advisors", ""],
-  ]) {
-    const { dialogs } = scriptedDialogs([...answers]);
-    assert.equal(
-      await chooseDelegateLine(dialogs, true),
-      undefined,
-      String(answers),
-    );
-  }
-});
+test("a bare /delegate opens the panel for the open session instead of sending a command", async () => {
+  const f = fixture(["close"]);
+  let sent = 0;
 
-test("a selector cannot send its choice after the open session changes", async () => {
-  for (const destination of ["ses_B", undefined]) {
-    let session = "ses_A";
-    const sent = [];
-    const alerts = [];
-    await runDelegateInTui("", {
-      sessionID: () => session,
-      dialogs: {
-        select: async () => {
-          session = destination;
-          return "session-reset";
-        },
-        prompt: async () => undefined,
-      },
-      rpc: () => ({ run: async (input) => sent.push(input) }),
-      alert: async (options) => alerts.push(options),
-    });
-    assert.deepEqual(sent, []);
-    assert.equal(alerts.length, 1);
-    assert.match(alerts[0].message, /session changed.*Nothing was sent/s);
-  }
-});
-
-test("dialog failures report that nothing was sent without exposing the host error", async () => {
-  for (const failed of ["select", "prompt"]) {
-    const sent = [];
-    const alerts = [];
-    const scripted = scriptedDialogs(["Defaults: Advisors"]).dialogs;
-    scripted[failed] = async () => {
-      throw new Error("private host error");
-    };
-    await runDelegateInTui("", {
-      sessionID: () => "ses_A",
-      dialogs: scripted,
-      rpc: () => ({ run: async (input) => sent.push(input) }),
-      alert: async (options) => alerts.push(options),
-    });
-    assert.deepEqual(sent, []);
-    assert.equal(alerts.length, 1);
-    assert.match(alerts[0].message, /could not finish.*Nothing was sent/s);
-    assert.doesNotMatch(alerts[0].message, /private host error/);
-  }
-});
-
-test("a bare /delegate opens the selector and sends what it built; cancelling sends nothing", async () => {
-  const sent = [];
-  const alerts = [];
-  const ports = (answers) => ({
+  await runDelegateInTui("", {
     rpc: () => ({
-      run: async (input) => {
-        sent.push(input);
-        return { text: "ok" };
+      run: async () => {
+        sent += 1;
+        return { text: "unused" };
       },
     }),
-    alert: async (options) => {
-      alerts.push(options);
-    },
-    sessionID: () => "ses_1",
-    dialogs: scriptedDialogs(answers).dialogs,
+    editor: f.client,
+    dialogs: f.dialogs,
+    alert: f.dialogs.alert,
+    sessionID: f.sessionID,
+  });
+  f.assertConsumed();
+
+  assert.equal(sent, 0);
+  assert.equal(f.shown[0].title, "Delegation · this session");
+  // A session panel reads the defaults and the session separately: each save needs its own revision.
+  assert.deepEqual(
+    f.calls.map(([method, input]) => [method, input.scope]),
+    [
+      ["read", "defaults"],
+      ["read", "session"],
+    ],
+  );
+});
+
+test("the model list offers off, not set and the catalogue, without a filter row", async () => {
+  const f = fixture(["role:small", "acme/plain", "close"], [true]);
+
+  await f.panel();
+  f.assertConsumed();
+
+  const models = f.shown.find((dialog) => dialog.title === "Model for Small");
+  assert.deepEqual(
+    models.options.map((option) => option.value),
+    ["off", "unset", "acme/plain", "other/model", "openai/gpt-5"],
+  );
+  assert.equal(models.current, "unset");
+  const reopened = f.shown.filter((dialog) =>
+    dialog.title.startsWith("Delegation"),
+  );
+  assert.ok(settingRows(reopened[1]).includes(aligned("Small", "acme/plain")));
+});
+
+test("a model with variants keeps its second step", async () => {
+  const f = fixture(
+    ["role:small", "openai/gpt-5", "openai/gpt-5#deep", "close"],
+    [true],
+  );
+
+  await f.panel();
+  f.assertConsumed();
+
+  const variant = f.shown.find(
+    (dialog) => dialog.title === "Default variant for openai/gpt-5",
+  );
+  assert.deepEqual(
+    variant.options.map((option) => option.value),
+    ["openai/gpt-5", "openai/gpt-5#deep"],
+  );
+  const reopened = f.shown
+    .filter((dialog) => dialog.title.startsWith("Delegation"))
+    .at(-1);
+  assert.ok(
+    settingRows(reopened).includes(aligned("Small", "openai/gpt-5#deep")),
+  );
+});
+
+test("thinking is one list of per launch, every level and a range", async () => {
+  const f = fixture(
+    ["thinking:small", "range", "low", "high", "close"],
+    [true],
+  );
+  await f.store.saveDefaults({
+    roles: { small: { kind: "configured", model: "acme/plain" } },
   });
 
-  await runDelegateInTui("/delegate", ports(["This session: reset"]));
-  await runDelegateInTui("", ports([undefined]));
-  // A typed command never opens the selector.
-  await runDelegateInTui("normal", ports([]));
+  await f.panel();
+  f.assertConsumed();
 
-  assert.deepEqual(sent, [
-    { line: "reset", sessionID: "ses_1" },
-    { line: "normal", sessionID: "ses_1" },
+  const thinking = f.shown.find(
+    (dialog) => dialog.title === "Thinking for Small",
+  );
+  assert.deepEqual(
+    thinking.options.map((option) => option.title),
+    [
+      "per launch",
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "range…",
+    ],
+  );
+  assert.equal(thinking.current, "unset");
+  assert.deepEqual(
+    f.shown
+      .filter((dialog) => dialog.title.includes("thinking level"))
+      .map((dialog) => dialog.title),
+    ["Lowest thinking level", "Highest thinking level (inclusive)"],
+  );
+  const reopened = f.shown.filter((dialog) =>
+    dialog.title.startsWith("Delegation"),
+  );
+  assert.ok(
+    settingRows(reopened[1]).includes(aligned("Small thinking", "low..high")),
+  );
+});
+
+test("an Advisor row adds an entry and off removes it, later rows moving up", async () => {
+  const f = fixture(
+    [
+      "advisor:add",
+      "acme/plain",
+      "advisor:add",
+      "other/model",
+      "advisor:0",
+      "off",
+      "close",
+    ],
+    [true],
+  );
+
+  await f.panel();
+  f.assertConsumed();
+
+  const panels = f.shown.filter((dialog) =>
+    dialog.title.startsWith("Delegation"),
+  );
+  const advisorRows = (dialog) =>
+    settingRows(dialog).filter((title) => /^Advisor \d/u.test(title));
+  assert.deepEqual(advisorRows(panels[1]), [
+    aligned("Advisor 1", "acme/plain"),
+    aligned("Advisor 2", "add"),
   ]);
-  assert.equal(alerts.length, 2);
+  assert.deepEqual(advisorRows(panels[2]), [
+    aligned("Advisor 1", "acme/plain"),
+    aligned("Advisor 2", "other/model"),
+    aligned("Advisor 3", "add"),
+  ]);
+  assert.deepEqual(advisorRows(panels[3]), [
+    aligned("Advisor 1", "other/model"),
+    aligned("Advisor 2", "add"),
+  ]);
+});
+
+test("a session panel shows the effective values and offers following the defaults", async () => {
+  const f = fixture(["intensity", undefined, "close"]);
+  await f.store.saveDefaults({ intensity: "normal" });
+
+  await f.panel({ scope: "session", sessionID: "ses_A" });
+  f.assertConsumed();
+
+  const main = f.shown[0];
+  const intensity = main.options.find((option) => option.value === "intensity");
+  assert.equal(intensity.title, aligned("Intensity", "normal"));
+  assert.equal(intensity.footer, "defaults");
+  const values = f.shown.find((dialog) => dialog.title === "Intensity");
+  assert.deepEqual(values.options[0], {
+    title: "follow defaults (normal)",
+    value: "inherit",
+    description: "Drop this session's value and follow the defaults.",
+  });
+  assert.equal(values.current, "normal");
+});
+
+test("Status and the local log run the typed line and return to the panel", async () => {
+  const f = fixture(["status", "log", "close"]);
+
+  await f.panel();
+  f.assertConsumed();
+
+  assert.deepEqual(f.runs, [
+    ["status", "defaults"],
+    ["log", "defaults"],
+  ]);
+  assert.deepEqual(
+    f.alerts.map((alert) => alert.message),
+    ["answer to status", "answer to log"],
+  );
+  assert.equal(
+    f.shown.filter((dialog) => dialog.title.startsWith("Delegation")).length,
+    3,
+  );
 });

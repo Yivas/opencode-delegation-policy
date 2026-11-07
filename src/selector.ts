@@ -1,215 +1,837 @@
-// The interactive way into `/delegate`: a few host dialogs that build the same line a person could
-// type, then hand it to the same server path. It adds discoverability, not a second implementation:
-// the grammar, validation and storage stay where they are, and cancelling any dialog changes nothing.
+// The interactive way into `/delegate`: one host dialog that lists every setting with its effective
+// value, edits a local draft and saves it through the same server path as the typed commands. It
+// adds discoverability, not a second implementation: the grammar, validation and storage stay where
+// they are, and closing without saving changes nothing.
 // It uses only the host's promise dialogs, so it needs no UI library at runtime.
 
-export type SelectOption<Value> = {
-  readonly title: string;
-  readonly value: Value;
-  readonly description?: string;
-  readonly footer?: string;
-  readonly disabled?: boolean;
+import {
+  display,
+  type EditorChangeRequest,
+  type EditorClient,
+  type EditorDialogs,
+  parseRead,
+  parseReply,
+  type SelectOption,
+} from "./editor/client.js";
+import type {
+  EditorModel,
+  EditorReply,
+  EditorScope,
+  EditorSnapshot,
+  EditorTarget,
+} from "./editor/contract.js";
+import type { PreferenceSource, PreferenceView } from "./state/effective.js";
+import {
+  ADVISOR_MODES,
+  type AdvisorMode,
+  type AdvisorsSetting,
+  type GlobalPreferenceChange,
+  INTENSITIES,
+  type Intensity,
+  MAX_ADVISORS,
+  PREFERENCES,
+  type Preference,
+  ROLE_KEYS,
+  type RoleKey,
+  type RoleSetting,
+  type SessionPreferenceChange,
+  type ThinkingSetting,
+} from "./state/schema.js";
+import { THINKING_LEVELS } from "./thinking/levels.js";
+
+const ROLE_LABELS: Readonly<Record<RoleKey, string>> = {
+  small: "Small",
+  medium: "Medium",
+  large: "Large",
+  visualDesign: "Visual Design",
 };
 
-export type SelectorDialogs = {
-  readonly select: <Value>(options: {
-    title: string;
-    placeholder?: string;
-    current?: Value;
-    options: readonly SelectOption<Value>[];
-  }) => Promise<Value | undefined>;
-  readonly prompt: (options: {
-    title: string;
-    description?: string;
-    placeholder?: string;
-  }) => Promise<string | undefined>;
+// One value column for every row, wide enough for the longest label plus two spaces. The width is
+// fixed by the label set, not by the rows on screen, so hiding a thinking row never moves the
+// values of the rows below it.
+const LABELS = [
+  "Intensity",
+  "Advisor mode",
+  "Preference",
+  ...ROLE_KEYS.flatMap((role) => [
+    ROLE_LABELS[role],
+    `${ROLE_LABELS[role]} thinking`,
+  ]),
+  ...Array.from(
+    { length: MAX_ADVISORS },
+    (_unused, index) => `Advisor ${index + 1}`,
+  ),
+];
+const VALUE_COLUMN = Math.max(...LABELS.map((label) => label.length)) + 2;
+
+function row(label: string, value: string): string {
+  return `${label.padEnd(VALUE_COLUMN)}${value}`;
+}
+
+const SOURCES: Readonly<Record<PreferenceSource, string>> = {
+  default: "built-in",
+  global: "defaults",
+  session: "this session",
 };
 
-const INTENSITIES = ["off", "normal", "aggressive", "orchestrator"] as const;
-const ADVISOR_MODES = ["off", "on", "with-delegation"] as const;
-const PREFERENCES = ["efficient", "standard", "intensive"] as const;
-const ROLES = ["small", "medium", "large", "visual-design"] as const;
+function provenance(source: PreferenceSource, changed: boolean): string {
+  return changed ? `${SOURCES[source]} · changed` : SOURCES[source];
+}
 
-type Action =
-  | "status"
-  | "editor-session"
-  | "editor-defaults"
-  | "session-intensity"
-  | "session-advisor"
-  | "session-preference"
-  | "session-reset"
-  | "session-clear"
-  | "defaults-intensity"
-  | "defaults-advisor"
-  | "defaults-preference"
-  | "defaults-role"
-  | "defaults-thinking"
-  | "defaults-advisors"
-  | "log";
+function roleText(setting: RoleSetting): string {
+  return setting.kind === "configured"
+    ? display(setting.model)
+    : setting.kind === "disabled"
+      ? "off"
+      : "not set";
+}
 
-function choices<T extends string>(values: readonly T[]): SelectOption<T>[] {
+function roleValue(setting: RoleSetting): string {
+  return setting.kind === "configured"
+    ? setting.model
+    : setting.kind === "disabled"
+      ? "off"
+      : "unset";
+}
+
+function thinkingText(setting: ThinkingSetting): string {
+  return setting.kind === "fixed"
+    ? display(setting.level)
+    : setting.kind === "range"
+      ? `${display(setting.from)}..${display(setting.to)}`
+      : "per launch";
+}
+
+// The draft holds only what the person changed. Scalars may inherit in a session; models, thinking
+// and Advisors exist only in the defaults, so a session can draft them but not apply them.
+type PanelDraft = {
+  readonly intensity?: Intensity | "inherit";
+  readonly advisorMode?: AdvisorMode | "inherit";
+  readonly preference?: Preference | "inherit";
+  readonly roles?: Readonly<Partial<Record<RoleKey, RoleSetting>>>;
+  readonly thinking?: Readonly<Partial<Record<RoleKey, ThinkingSetting>>>;
+  readonly advisors?: AdvisorsSetting;
+};
+
+type PanelState = {
+  readonly defaults: EditorSnapshot;
+  readonly session?: EditorSnapshot;
+};
+
+function effective(state: PanelState): EditorSnapshot {
+  return state.session ?? state.defaults;
+}
+
+function hasDraft(draft: PanelDraft): boolean {
+  return Object.keys(draft).length > 0;
+}
+
+function sessionChange(draft: PanelDraft): SessionPreferenceChange | undefined {
+  const change: SessionPreferenceChange = {
+    ...(draft.intensity === undefined ? {} : { intensity: draft.intensity }),
+    ...(draft.advisorMode === undefined
+      ? {}
+      : { advisorMode: draft.advisorMode }),
+    ...(draft.preference === undefined ? {} : { preference: draft.preference }),
+  };
+  return Object.keys(change).length === 0 ? undefined : change;
+}
+
+function defaultsChange(draft: PanelDraft): GlobalPreferenceChange | undefined {
+  // A session value that inherits has nothing to save in the defaults.
+  const change: GlobalPreferenceChange = {
+    ...(draft.intensity === undefined || draft.intensity === "inherit"
+      ? {}
+      : { intensity: draft.intensity }),
+    ...(draft.advisorMode === undefined || draft.advisorMode === "inherit"
+      ? {}
+      : { advisorMode: draft.advisorMode }),
+    ...(draft.preference === undefined || draft.preference === "inherit"
+      ? {}
+      : { preference: draft.preference }),
+    ...(draft.roles === undefined ? {} : { roles: draft.roles }),
+    ...(draft.thinking === undefined ? {} : { thinking: draft.thinking }),
+    ...(draft.advisors === undefined ? {} : { advisors: draft.advisors }),
+  };
+  return Object.keys(change).length === 0 ? undefined : change;
+}
+
+// What a successful save has already stored. A defaults save stores every concrete scalar and every
+// model row; an inherit marker and the other scope's pending changes stay in the draft. A scalar the
+// open session overrides also stays: the defaults took it, but the session still shows its own value,
+// so the draft keeps it ready for `Apply to this session` instead of dropping it unseen.
+function clearSaved(
+  draft: PanelDraft,
+  scope: EditorScope,
+  session?: PreferenceView["provenance"],
+): PanelDraft {
+  if (scope === "session")
+    return {
+      ...(draft.roles === undefined ? {} : { roles: draft.roles }),
+      ...(draft.thinking === undefined ? {} : { thinking: draft.thinking }),
+      ...(draft.advisors === undefined ? {} : { advisors: draft.advisors }),
+    };
+  const keep = (field: "intensity" | "advisorMode" | "preference") =>
+    draft[field] !== undefined &&
+    (draft[field] === "inherit" || session?.[field] === "session");
+  return {
+    ...(keep("intensity") ? { intensity: draft.intensity } : {}),
+    ...(keep("advisorMode") ? { advisorMode: draft.advisorMode } : {}),
+    ...(keep("preference") ? { preference: draft.preference } : {}),
+  };
+}
+
+function scalarOptions<T extends string>(
+  values: readonly T[],
+  inherited: T | undefined,
+): SelectOption<T | "inherit">[] {
+  return [
+    ...(inherited === undefined
+      ? []
+      : [
+          {
+            title: `follow defaults (${inherited})`,
+            value: "inherit" as const,
+            description: "Drop this session's value and follow the defaults.",
+          },
+        ]),
+    ...values.map((value) => ({ title: value, value })),
+  ];
+}
+
+function levelOptions<T extends string>(
+  values: readonly T[],
+): SelectOption<T>[] {
   return values.map((value) => ({ title: value, value }));
 }
 
-// One word of free text, as the grammar splits on spaces. Empty or cancelled means no change.
-function word(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed === undefined || trimmed === "" || /\s/.test(trimmed)
-    ? undefined
-    : trimmed;
+async function chooseModel(
+  dialogs: EditorDialogs,
+  models: readonly EditorModel[],
+  title: string,
+  current: string | undefined,
+): Promise<string | undefined> {
+  // A stored reference may carry a variant; the host's search lists base models, so the current
+  // entry is matched without it and the variant step keeps the full reference.
+  const base = current?.split("#")[0];
+  const chosen = await dialogs.select({
+    title,
+    options: [
+      {
+        title: "off",
+        value: "off",
+        description:
+          "Disable this role, or remove this Advisor from the draft.",
+      },
+      {
+        title: "not set",
+        value: "unset",
+        description:
+          "No model configured; ordinary roles must be explicitly off or configured.",
+      },
+      ...models.map((model) => ({
+        title: display(model.reference),
+        value: model.reference,
+        description: `${model.variants.length} proven variants`,
+      })),
+    ],
+    ...(base === undefined ? {} : { current: base }),
+  });
+  if (chosen === undefined || chosen === "off" || chosen === "unset")
+    return chosen;
+  const model = models.find((entry) => entry.reference === chosen);
+  if (model === undefined) throw new Error("unknown editor model choice");
+  if (model.variants.length === 0) return model.reference;
+  return dialogs.select({
+    title: `Default variant for ${display(model.reference)}`,
+    options: [
+      {
+        title: "choose per launch",
+        value: model.reference,
+        description:
+          "No default variant; the policy still lists proven choices.",
+      },
+      ...model.variants.map((id) => ({
+        title: display(id),
+        value: `${model.reference}#${id}`,
+      })),
+    ],
+    current:
+      current?.startsWith(`${model.reference}#`) === true
+        ? current
+        : model.reference,
+  });
 }
 
-// Returns the `/delegate` arguments to run, or undefined when the person cancelled.
-export async function chooseDelegateLine(
-  dialogs: SelectorDialogs,
-  sessionOpen: boolean,
-): Promise<string | undefined> {
-  const sessionActions: SelectOption<Action>[] = sessionOpen
-    ? [
-        {
-          title: "Edit this session",
-          value: "editor-session",
-          description: "Draft, preview and apply session settings.",
-        },
-        { title: "This session: intensity", value: "session-intensity" },
-        { title: "This session: Advisor mode", value: "session-advisor" },
-        {
-          title: "This session: model preference",
-          value: "session-preference",
-        },
-        {
-          title: "This session: reset",
-          value: "session-reset",
-          description: "Turn this session's delegation and Advisor off.",
-        },
-        {
-          title: "This session: clear",
-          value: "session-clear",
-          description: "Drop this session's changes and follow the defaults.",
-        },
-      ]
-    : [];
-  const action = await dialogs.select<Action>({
-    title: "Delegation",
-    options: [
-      { title: "Show status", value: "status" },
-      ...sessionActions,
-      {
-        title: "Edit defaults",
-        value: "editor-defaults",
-        description: "Pick catalogue models and preview a draft before saving.",
-      },
-      { title: "Defaults: intensity", value: "defaults-intensity" },
-      { title: "Defaults: Advisor mode", value: "defaults-advisor" },
-      { title: "Defaults: model preference", value: "defaults-preference" },
-      { title: "Defaults: role model", value: "defaults-role" },
-      { title: "Defaults: role thinking", value: "defaults-thinking" },
-      { title: "Defaults: Advisors", value: "defaults-advisors" },
-      { title: "Show the local log", value: "log" },
-    ],
-  });
+function thinkingChoice(setting: ThinkingSetting): string {
+  if (setting.kind === "fixed") return `fixed:${setting.level}`;
+  return setting.kind === "range" ? "range" : "unset";
+}
 
-  switch (action) {
-    case undefined:
-      return undefined;
-    case "status":
-      return "status";
-    case "editor-session":
-      return "edit session";
-    case "editor-defaults":
-      return "edit defaults";
-    case "log":
-      return "log";
-    case "session-reset":
-      return "reset";
-    case "session-clear":
-      return "clear";
-    case "session-intensity": {
-      const value = await dialogs.select({
-        title: "Intensity for this session",
-        options: choices(INTENSITIES),
-      });
-      return value;
-    }
-    case "session-advisor": {
-      const value = await dialogs.select({
-        title: "Advisor mode for this session",
-        options: choices(ADVISOR_MODES),
-      });
-      return value === undefined ? undefined : `advisor ${value}`;
-    }
-    case "session-preference": {
-      const value = await dialogs.select({
-        title: "Model preference for this session",
-        options: choices(PREFERENCES),
-      });
-      return value === undefined ? undefined : `preference ${value}`;
-    }
-    case "defaults-intensity": {
-      const value = await dialogs.select({
-        title: "Default intensity",
-        options: choices(INTENSITIES),
-      });
-      return value === undefined ? undefined : `defaults intensity ${value}`;
-    }
-    case "defaults-advisor": {
-      const value = await dialogs.select({
-        title: "Default Advisor mode",
-        options: choices(ADVISOR_MODES),
-      });
-      return value === undefined ? undefined : `defaults advisor-mode ${value}`;
-    }
-    case "defaults-preference": {
-      const value = await dialogs.select({
-        title: "Default model preference",
-        options: choices(PREFERENCES),
-      });
-      return value === undefined ? undefined : `defaults preference ${value}`;
-    }
-    case "defaults-role": {
-      const role = await dialogs.select({
-        title: "Role",
-        options: choices(ROLES),
-      });
-      if (role === undefined) return undefined;
-      const model = word(
-        await dialogs.prompt({
-          title: `Model for ${role}`,
-          description: "provider/model, optionally #variant; or off, or unset.",
-          placeholder: "provider/model",
-        }),
-      );
-      return model === undefined ? undefined : `defaults role ${role} ${model}`;
-    }
-    case "defaults-thinking": {
-      const role = await dialogs.select({
-        title: "Role",
-        options: choices(ROLES),
-      });
-      if (role === undefined) return undefined;
-      const level = word(
-        await dialogs.prompt({
-          title: `Thinking for ${role}`,
-          description:
-            "A level such as high, a range such as low..high, or unset.",
-          placeholder: "high",
-        }),
-      );
-      return level === undefined
-        ? undefined
-        : `defaults thinking ${role} ${level}`;
-    }
-    case "defaults-advisors": {
-      const value = await dialogs.prompt({
-        title: "Advisors",
+// One list holds every choice: per launch, each level as a fixed policy, and a range that asks for
+// its two bounds. A second level list would make "per launch" and "fixed" look like the same step.
+async function chooseThinking(
+  dialogs: EditorDialogs,
+  title: string,
+  current: ThinkingSetting,
+): Promise<ThinkingSetting | undefined> {
+  const choice = await dialogs.select({
+    title,
+    options: [
+      {
+        title: "per launch",
+        value: "unset",
         description:
-          "Up to three provider/model references separated by spaces; or off, or unset.",
-        placeholder: "provider/model",
+          "The policy lists its proven levels and one is chosen per launch.",
+      },
+      ...THINKING_LEVELS.map((level) => ({
+        title: level,
+        value: `fixed:${level}`,
+        description: "Use this level for every launch.",
+      })),
+      {
+        title: "range…",
+        value: "range",
+        description: "Choose an inclusive lowest and highest level.",
+      },
+    ],
+    current: thinkingChoice(current),
+  });
+  if (choice === undefined) return undefined;
+  if (choice === "unset") return { kind: "unset" };
+  if (choice !== "range")
+    return { kind: "fixed", level: choice.slice("fixed:".length) };
+  const from = await dialogs.select({
+    title: "Lowest thinking level",
+    options: levelOptions(THINKING_LEVELS),
+  });
+  if (from === undefined) return undefined;
+  const to = await dialogs.select({
+    title: "Highest thinking level (inclusive)",
+    options: levelOptions(THINKING_LEVELS.slice(THINKING_LEVELS.indexOf(from))),
+  });
+  return to === undefined ? undefined : { kind: "range", from, to };
+}
+
+function roleSetting(value: string): RoleSetting {
+  if (value === "off") return { kind: "disabled" };
+  if (value === "unset") return { kind: "unset" };
+  return { kind: "configured", model: value };
+}
+
+function roleIn(action: string, prefix: string): RoleKey | undefined {
+  return ROLE_KEYS.find((role) => action === `${prefix}:${role}`);
+}
+
+class SessionChanged extends Error {}
+class ReadFailure extends Error {}
+
+export type DelegatePanelPorts = {
+  readonly client: EditorClient;
+  readonly dialogs: EditorDialogs;
+  readonly sessionID: () => string | undefined;
+  // A typed `/delegate` line, answered by the server for the panel's own scope. Status and the local
+  // log read through it so the panel and the typed commands cannot drift apart.
+  readonly run: (line: string, target: EditorTarget) => Promise<string>;
+};
+
+// The draft is local and disposable. Only Apply and Save call the mutating RPC, and each of them
+// previews the same draft, scope and revision first. The host owns every dialog, its keyboard
+// interaction and presentation; this module adds no Solid runtime or separate renderer.
+// Names what failed without echoing host text: an RPC error's type code, or this client's own fixed
+// validation message. Anything else is reported only by its kind.
+function failureKind(error: unknown): string {
+  if (typeof error === "object" && error !== null && "type" in error) {
+    const type = (error as { type: unknown }).type;
+    if (typeof type === "string" && /^[\w.-]{1,64}$/.test(type))
+      return `RPC ${type}`;
+  }
+  if (
+    error instanceof Error &&
+    /^(invalid|missing|wrong) editor [\w ]{1,40}$/.test(error.message)
+  )
+    return error.message;
+  return error instanceof Error ? error.name : typeof error;
+}
+
+export async function runDelegatePanel(
+  target: EditorTarget,
+  ports: DelegatePanelPorts,
+): Promise<void> {
+  let openedSession: string | undefined;
+  const ensureSession = () => {
+    if (ports.sessionID() !== openedSession) throw new SessionChanged();
+  };
+  const dialogs: EditorDialogs = {
+    select: async (input) => {
+      const value = await ports.dialogs.select(input);
+      ensureSession();
+      return value;
+    },
+    prompt: async (input) => {
+      const value = await ports.dialogs.prompt(input);
+      ensureSession();
+      return value;
+    },
+    confirm: async (input) => {
+      const value = await ports.dialogs.confirm(input);
+      ensureSession();
+      return value;
+    },
+    alert: async (input) => {
+      await ports.dialogs.alert(input);
+      ensureSession();
+    },
+  };
+  let draft: PanelDraft = {};
+  // An unconfirmed save may already be stored; a refused or unread one leaves the revision in hand
+  // possibly stale. Both block writing until a read succeeds, so a conflict is never overwritten.
+  let unconfirmed = false;
+  let stale = false;
+  // A refused preview may be a validation error or a stale revision. Saving stays possible, so a
+  // corrected draft needs no reload, but Reload is offered in case the settings moved meanwhile.
+  let offerReload = false;
+  let saved = false;
+  let focused: string | undefined;
+
+  const readScope = async (scope: EditorTarget): Promise<EditorSnapshot> => {
+    const read = parseRead(await ports.client.read(scope), scope);
+    ensureSession();
+    if (!read.ok) throw new ReadFailure(read.text);
+    return read.snapshot;
+  };
+  const loadState = async (): Promise<PanelState> => {
+    const defaults = await readScope({ scope: "defaults" });
+    if (target.scope !== "session") return { defaults };
+    return { defaults, session: await readScope(target) };
+  };
+  const edit = (next: PanelDraft) => {
+    draft = next;
+    saved = false;
+  };
+
+  try {
+    openedSession = ports.sessionID();
+    if (target.scope === "session" && target.sessionID !== openedSession)
+      throw new SessionChanged();
+    let state: PanelState;
+    try {
+      state = await loadState();
+    } catch (error) {
+      ensureSession();
+      await dialogs.alert({
+        title: "Delegation",
+        message:
+          error instanceof ReadFailure
+            ? error.message
+            : `The saved settings could not be read. Nothing was changed. Reopen /delegate and try again. (${failureKind(error)})`,
       });
-      const models = value?.trim();
-      return models === undefined || models === ""
-        ? undefined
-        : `defaults advisors ${models}`;
+      return;
     }
+
+    for (;;) {
+      ensureSession();
+      const shown = effective(state).view;
+      const base = shown.preferences;
+      const sources = shown.provenance;
+      const advisors = draft.advisors ?? base.advisors;
+      const advisorModels =
+        advisors.kind === "configured" ? advisors.models : [];
+      const scalarChanged =
+        draft.intensity !== undefined ||
+        draft.advisorMode !== undefined ||
+        draft.preference !== undefined;
+      const modelsChanged =
+        draft.roles !== undefined ||
+        draft.thinking !== undefined ||
+        draft.advisors !== undefined;
+      const blocked = unconfirmed || stale;
+      const blockedReason = unconfirmed
+        ? "The last save could not be confirmed; reload the saved settings first."
+        : "The saved settings changed; reload them before saving this draft.";
+
+      const rows: SelectOption<string>[] = [
+        {
+          title: row("Intensity", draft.intensity ?? base.intensity),
+          value: "intensity",
+          footer: provenance(sources.intensity, draft.intensity !== undefined),
+        },
+        {
+          title: row("Advisor mode", draft.advisorMode ?? base.advisorMode),
+          value: "advisorMode",
+          footer: provenance(
+            sources.advisorMode,
+            draft.advisorMode !== undefined,
+          ),
+        },
+        {
+          title: row("Preference", draft.preference ?? base.preference),
+          value: "preference",
+          footer: provenance(
+            sources.preference,
+            draft.preference !== undefined,
+          ),
+        },
+      ];
+      for (const role of ROLE_KEYS) {
+        const setting = draft.roles?.[role] ?? base.roles[role];
+        rows.push({
+          title: row(ROLE_LABELS[role], roleText(setting)),
+          value: `role:${role}`,
+          footer: provenance(
+            sources.roles[role],
+            draft.roles?.[role] !== undefined,
+          ),
+        });
+        if (setting.kind !== "configured") continue;
+        const thinking = draft.thinking?.[role] ?? base.thinking[role];
+        rows.push({
+          title: row(`${ROLE_LABELS[role]} thinking`, thinkingText(thinking)),
+          value: `thinking:${role}`,
+          footer: provenance(
+            sources.thinking[role],
+            draft.thinking?.[role] !== undefined,
+          ),
+        });
+      }
+      advisorModels.forEach((model, index) => {
+        rows.push({
+          title: row(`Advisor ${index + 1}`, display(model)),
+          value: `advisor:${index}`,
+          footer: provenance(sources.advisors, draft.advisors !== undefined),
+        });
+      });
+      if (advisorModels.length < MAX_ADVISORS)
+        rows.push({
+          title: row(`Advisor ${advisorModels.length + 1}`, "add"),
+          value: "advisor:add",
+          footer: provenance(sources.advisors, draft.advisors !== undefined),
+        });
+
+      const saveable = defaultsChange(draft) !== undefined;
+      const actions: SelectOption<string>[] = [];
+      // The host hides disabled options, and a save action that comes and goes reads as missing. Both
+      // stay listed, as in Pi; one that has nothing it may save says so and does nothing. Only an
+      // uncertain or stale save hides them, and Reload then carries the reason.
+      const applyNote = modelsChanged
+        ? "models save only as defaults"
+        : scalarChanged
+          ? "intensity, Advisor mode and preference"
+          : "no changes";
+      if (target.scope === "session")
+        actions.push({
+          title: "Apply to this session",
+          value: "apply",
+          disabled: blocked,
+          description: `(${applyNote})`,
+        });
+      actions.push({
+        title: "Save as defaults",
+        value: "save",
+        disabled: blocked,
+        description: saveable
+          ? "(models and Advisors need a restart)"
+          : "(no changes)",
+      });
+      if (blocked || offerReload)
+        actions.push({
+          title: "Reload saved settings",
+          value: "reload",
+          description: blocked
+            ? `${blockedReason} The draft is kept.`
+            : "Read the saved settings again; the draft is kept.",
+        });
+      actions.push(
+        {
+          title: "Status",
+          value: "status",
+          description: "Show the settings and whether they work.",
+        },
+        {
+          title: "Local log",
+          value: "log",
+          description: "Newest entries of the local log.",
+        },
+        { title: "Close", value: "close" },
+      );
+
+      const options = [...rows, ...actions];
+      const current = options.some(
+        (option) => option.value === focused && !option.disabled,
+      )
+        ? focused
+        : undefined;
+      const action = await dialogs.select({
+        title: `Delegation · ${target.scope === "session" ? "this session" : "defaults"}${hasDraft(draft) ? " · modified" : ""}${saved ? " · saved" : ""}`,
+        options,
+        ...(current === undefined ? {} : { current }),
+      });
+      focused = action;
+
+      if (action === undefined || action === "close") {
+        if (
+          !hasDraft(draft) ||
+          (await dialogs.confirm({
+            title: "Discard delegation changes?",
+            message: unconfirmed
+              ? "The last save is unconfirmed and may have persisted. Close this panel and discard its local draft? Check status before relying on the settings."
+              : "The draft has not been saved. Discard it and close?",
+            label: { confirm: "Discard", cancel: "Keep editing" },
+          })) === true
+        )
+          return;
+        continue;
+      }
+
+      if (action === "status" || action === "log") {
+        await dialogs.alert({
+          title: "Delegation",
+          message: await ports.run(action, target),
+        });
+        continue;
+      }
+
+      if (action === "reload") {
+        try {
+          state = await loadState();
+          unconfirmed = false;
+          stale = false;
+          offerReload = false;
+          await dialogs.alert({
+            title: "Saved settings reloaded; draft kept",
+            message:
+              "The panel now shows the saved settings. Review the draft before saving it.",
+          });
+        } catch (error) {
+          ensureSession();
+          await dialogs.alert({
+            title: "Delegation",
+            message:
+              error instanceof ReadFailure
+                ? error.message
+                : "The saved settings could not be reloaded. The draft and its previous save status are kept. Try Reload again or close with discard confirmation.",
+          });
+        }
+        continue;
+      }
+
+      if (action === "apply" || action === "save") {
+        const scope: EditorScope = action === "apply" ? "session" : "defaults";
+        const change =
+          scope === "session" ? sessionChange(draft) : defaultsChange(draft);
+        const source = scope === "session" ? state.session : state.defaults;
+        if (scope === "session" && modelsChanged) {
+          await dialogs.alert({
+            title: "Delegation",
+            message:
+              "Models, thinking and Advisors are shared by every session. Use Save as defaults, then restart OpenCode.",
+          });
+          continue;
+        }
+        if (change === undefined || source === undefined) continue;
+        const requestTarget: EditorTarget =
+          scope === "session" ? target : { scope: "defaults" };
+        // Preview and write carry the same draft, scope and revision: the server refuses a preview
+        // against stale sources, and the write repeats that check under its own queue.
+        const request: EditorChangeRequest = {
+          ...requestTarget,
+          revision: source.revision,
+          change,
+        };
+        let preview: EditorReply;
+        try {
+          preview = parseReply(
+            await ports.client.preview(request),
+            requestTarget,
+          );
+        } catch {
+          ensureSession();
+          await dialogs.alert({
+            title: "Delegation",
+            message:
+              "The preview could not be confirmed. Nothing was saved; the draft is still here. Try again.",
+          });
+          continue;
+        }
+        ensureSession();
+        if (!preview.ok) {
+          offerReload = true;
+          await dialogs.alert({
+            title: "Delegation",
+            message: preview.text,
+          });
+          continue;
+        }
+        let applied: EditorReply;
+        // Set before the write is sent: if anything interrupts the wait, including a session change,
+        // the save may already be stored and must not be reported as unsaved.
+        unconfirmed = true;
+        try {
+          applied = parseReply(
+            await ports.client.apply(request),
+            requestTarget,
+          );
+        } catch {
+          ensureSession();
+          await dialogs.alert({
+            title: "Delegation",
+            message:
+              "The save result could not be confirmed. The draft is kept, but it may already have persisted. Reload the saved settings before saving again.",
+          });
+          continue;
+        }
+        ensureSession();
+        if (!applied.ok) {
+          if (applied.persistence !== "unknown") {
+            unconfirmed = false;
+            stale = true;
+          }
+          await dialogs.alert({
+            title: "Delegation",
+            message: applied.text,
+          });
+          continue;
+        }
+        // The server confirmed the write, so the draft part it carried is no longer pending even if
+        // the fresh read below fails.
+        const restartNeeded =
+          scope === "defaults" &&
+          (draft.roles !== undefined ||
+            draft.thinking !== undefined ||
+            draft.advisors !== undefined);
+        draft = clearSaved(draft, scope, state.session?.view.provenance);
+        unconfirmed = false;
+        stale = false;
+        offerReload = false;
+        saved = true;
+        try {
+          state = await loadState();
+        } catch {
+          ensureSession();
+          stale = true;
+          await dialogs.alert({
+            title: "Delegation",
+            message:
+              "Saved, but the saved settings could not be read again. Reload them before making another change.",
+          });
+          continue;
+        }
+        if (restartNeeded)
+          await dialogs.alert({
+            title: "Delegation",
+            message:
+              "Saved. Restart OpenCode so the agents use the new models.",
+          });
+        continue;
+      }
+
+      if (action === "intensity") {
+        const value = await dialogs.select({
+          title: "Intensity",
+          options: scalarOptions(
+            INTENSITIES,
+            target.scope === "session"
+              ? state.defaults.view.preferences.intensity
+              : undefined,
+          ),
+          current: draft.intensity ?? base.intensity,
+        });
+        if (value !== undefined) edit({ ...draft, intensity: value });
+      } else if (action === "advisorMode") {
+        const value = await dialogs.select({
+          title: "Advisor mode",
+          options: scalarOptions(
+            ADVISOR_MODES,
+            target.scope === "session"
+              ? state.defaults.view.preferences.advisorMode
+              : undefined,
+          ),
+          current: draft.advisorMode ?? base.advisorMode,
+        });
+        if (value !== undefined) edit({ ...draft, advisorMode: value });
+      } else if (action === "preference") {
+        const value = await dialogs.select({
+          title: "Model preference",
+          options: scalarOptions(
+            PREFERENCES,
+            target.scope === "session"
+              ? state.defaults.view.preferences.preference
+              : undefined,
+          ),
+          current: draft.preference ?? base.preference,
+        });
+        if (value !== undefined) edit({ ...draft, preference: value });
+      } else if (action.startsWith("role:")) {
+        const role = roleIn(action, "role");
+        if (role === undefined) throw new Error("unknown role");
+        const setting = draft.roles?.[role] ?? base.roles[role];
+        const model = await chooseModel(
+          dialogs,
+          effective(state).models,
+          `Model for ${ROLE_LABELS[role]}`,
+          roleValue(setting),
+        );
+        if (model !== undefined)
+          edit({
+            ...draft,
+            roles: { ...draft.roles, [role]: roleSetting(model) },
+          });
+      } else if (action.startsWith("thinking:")) {
+        const role = roleIn(action, "thinking");
+        if (role === undefined) throw new Error("unknown role");
+        const setting = await chooseThinking(
+          dialogs,
+          `Thinking for ${ROLE_LABELS[role]}`,
+          draft.thinking?.[role] ?? base.thinking[role],
+        );
+        if (setting !== undefined)
+          edit({
+            ...draft,
+            thinking: { ...draft.thinking, [role]: setting },
+          });
+      } else if (action.startsWith("advisor:")) {
+        const adding = action === "advisor:add";
+        const index = adding
+          ? advisorModels.length
+          : Number(action.slice("advisor:".length));
+        if (
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index > advisorModels.length ||
+          index >= MAX_ADVISORS
+        )
+          throw new Error("unknown Advisor");
+        const model = await chooseModel(
+          dialogs,
+          effective(state).models,
+          `Model for Advisor ${index + 1}`,
+          adding ? undefined : advisorModels[index],
+        );
+        if (
+          model === undefined ||
+          (adding && (model === "off" || model === "unset"))
+        )
+          continue;
+        const next = [...advisorModels];
+        if (model === "off" || model === "unset") next.splice(index, 1);
+        else next[index] = model;
+        edit({
+          ...draft,
+          advisors:
+            next.length === 0
+              ? { kind: "unset" }
+              : { kind: "configured", models: next },
+        });
+      } else throw new Error("unknown panel choice");
+    }
+  } catch (error) {
+    await ports.dialogs.alert({
+      title: "Delegation",
+      message: unconfirmed
+        ? "The save result could not be confirmed in this view. Check /delegate status in the panel's original session or the defaults before relying on it."
+        : error instanceof SessionChanged
+          ? "The open session changed. The draft was not saved. Reopen /delegate in the session you want to edit."
+          : "The delegation panel could not finish. The draft was not saved. Reopen /delegate and try again; typed commands remain available.",
+    });
   }
 }

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- `/delegate` opens one settings panel, as in Pi: each setting with its value, then
+  `Apply to this session`, `Save as defaults`, `Status`, `Local log` and `Close`. Saving validates the
+  draft and stores it without a second confirmation. It replaces the menu of separate actions.
+
+### Fixed
+
+- `/delegate` now appears in the slash autocomplete.
+
 ## 0.1.0-alpha.2 — 2026-11-06
 
 ### Fixed

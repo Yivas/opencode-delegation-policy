@@ -1,14 +1,14 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import type { JSX } from "@opentui/solid";
 
-import {
-  type EditorClient,
-  type EditorDialogs,
-  runPreferenceEditor,
+import type {
+  EditorClient,
+  EditorDialogs,
+  SelectorDialogs,
 } from "./editor/client.js";
 import type { FooterPorts } from "./footer.js";
 import { delegateRpc } from "./rpc.js";
-import { chooseDelegateLine, type SelectorDialogs } from "./selector.js";
+import { runDelegatePanel } from "./selector.js";
 
 // The TUI side of the minimal `/delegate` command. The server owns the preferences, so this only
 // forwards the line over RPC and shows the answer in a dialog: a dialog is something the person
@@ -71,115 +71,102 @@ export type DelegateTuiPorts = {
     title: string;
     message: string;
   }) => Promise<void>;
-  // The host's dialogs for the interactive selector. Without them a bare `/delegate` shows the
-  // status, as typed commands always can.
+  // The host's dialogs for the settings panel. Without them a bare `/delegate` shows the status, as
+  // typed commands always can.
   readonly dialogs?: SelectorDialogs & Partial<Pick<EditorDialogs, "confirm">>;
   readonly editor?: EditorClient;
 };
 
+// Runs one typed line through the server and returns what the person should see. A reply without
+// text would otherwise show an empty dialog that looks like a success.
+async function runLine(
+  line: string,
+  ports: DelegateTuiPorts,
+  sessionID: string | undefined,
+): Promise<string> {
+  try {
+    const answer = await ports.rpc(delegateRpc).run({
+      line,
+      ...(sessionID === undefined ? {} : { sessionID }),
+    });
+    return (
+      replyText(answer) ?? describeRpcFailure({ type: "rpc.invalid_output" })
+    );
+  } catch (error) {
+    return describeRpcFailure(error);
+  }
+}
+
 // What `/delegate` does in the TUI, separated from the host context so it can be exercised alone. A
-// bare `/delegate` opens the selector, which builds the same line a person could type.
+// bare `/delegate` and the `edit` aliases open the settings panel; every other line is a typed
+// command and travels unchanged through the existing command RPC.
 export async function runDelegateInTui(
   input: string | undefined,
   ports: DelegateTuiPorts,
 ): Promise<void> {
   let line = (input ?? "").trim();
   if (line === "/delegate") line = "";
-  if (line === "" && ports.dialogs !== undefined) {
-    let chosen: string | undefined;
-    let openedSession: string | undefined;
-    try {
-      openedSession = ports.sessionID();
-      chosen = await chooseDelegateLine(
-        ports.dialogs,
-        openedSession !== undefined,
-      );
-      // Cancelling the selector is not a request: nothing is sent and nothing is shown.
-      if (chosen === undefined) return;
-      if (ports.sessionID() !== openedSession) {
-        await ports.alert({
-          title: TITLE,
-          message:
-            "The open session changed while the selector was open. Nothing was sent. Run /delegate again in the session you want to change.",
-        });
-        return;
-      }
-    } catch {
-      await ports.alert({
-        title: TITLE,
-        message:
-          "The delegation selector could not finish. Nothing was sent. Try again, or type /delegate status to check the settings.",
-      });
-      return;
-    }
-    line = chosen;
-  }
-
   // Normalize only command words for interception. Other lines, including model references, travel
   // unchanged through the existing command RPC.
-  const aliasWords = line.split(/\s+/);
-  if (aliasWords[0]?.toLowerCase() === "/delegate") aliasWords.shift();
-  const alias = aliasWords.map((word) => word.toLowerCase()).join(" ");
-  if (
+  const words = line.split(/\s+/).filter(Boolean);
+  if (words[0]?.toLowerCase() === "/delegate") words.shift();
+  const alias = words.map((word) => word.toLowerCase()).join(" ");
+  const opensPanel =
+    line === "" ||
     alias === "edit" ||
     alias === "edit session" ||
-    alias === "edit defaults"
-  ) {
+    alias === "edit defaults";
+  if (opensPanel) {
     const sessionID = ports.sessionID();
-    const scope =
-      alias === "edit defaults" || (alias === "edit" && sessionID === undefined)
+    // `edit defaults` never takes the open session; without one, every alias works on the defaults.
+    const scope: "session" | "defaults" =
+      alias === "edit defaults" || sessionID === undefined
         ? "defaults"
         : "session";
     const confirm = ports.dialogs?.confirm;
     if (
-      ports.editor === undefined ||
-      ports.dialogs === undefined ||
-      confirm === undefined ||
-      (scope === "session" && sessionID === undefined)
+      ports.editor !== undefined &&
+      ports.dialogs !== undefined &&
+      confirm !== undefined
     ) {
+      const dialogs = ports.dialogs;
+      await runDelegatePanel(
+        scope === "session" && sessionID !== undefined
+          ? { scope, sessionID }
+          : { scope: "defaults" },
+        {
+          client: ports.editor,
+          sessionID: ports.sessionID,
+          dialogs: {
+            select: (options) => dialogs.select(options),
+            prompt: (options) => dialogs.prompt(options),
+            confirm: (options) => confirm.call(dialogs, options),
+            alert: ports.alert,
+          },
+          run: (command, scope) =>
+            runLine(
+              command,
+              ports,
+              scope.scope === "session" ? scope.sessionID : undefined,
+            ),
+        },
+      );
+      return;
+    }
+    if (line !== "") {
       await ports.alert({
         title: TITLE,
         message:
-          "This editor is unavailable here. Open a session for session settings, or use the typed /delegate commands.",
+          "The settings panel is unavailable here. Use the typed /delegate commands.",
       });
       return;
     }
-    const dialogs = ports.dialogs;
-    await runPreferenceEditor(
-      {
-        scope,
-        ...(scope === "session" && sessionID !== undefined
-          ? { sessionID }
-          : {}),
-      },
-      {
-        client: ports.editor,
-        sessionID: ports.sessionID,
-        dialogs: {
-          select: (options) => dialogs.select(options),
-          prompt: (options) => dialogs.prompt(options),
-          confirm: (options) => confirm.call(dialogs, options),
-          alert: ports.alert,
-        },
-      },
-    );
-    return;
   }
 
-  let message: string;
-  try {
-    const sessionID = ports.sessionID();
-    const answer = await ports.rpc(delegateRpc).run({
-      line,
-      ...(sessionID === undefined ? {} : { sessionID }),
-    });
-    // A reply without text would otherwise show an empty dialog that looks like a success.
-    message =
-      replyText(answer) ?? describeRpcFailure({ type: "rpc.invalid_output" });
-  } catch (error) {
-    message = describeRpcFailure(error);
-  }
-  await ports.alert({ title: TITLE, message });
+  await ports.alert({
+    title: TITLE,
+    message: await runLine(line, ports, ports.sessionID()),
+  });
 }
 
 type FooterRender = (
@@ -280,7 +267,13 @@ function registerDelegateCommand(context: Plugin.Context): void {
             rpc: (definition) => context.client.rpc(definition),
             alert: (options) => context.ui.dialog.alert(options),
             dialogs: {
-              select: (options) => context.ui.dialog.select(options),
+              select: (options) => {
+                const chosen = context.ui.dialog.select(options);
+                // The select is already showing once the call returns. The default width cuts the
+                // panel's "label  model" rows, so widen this dialog only; the next one starts over.
+                context.ui.dialog.set({ size: "large" });
+                return chosen;
+              },
               prompt: (options) => context.ui.dialog.prompt(options),
               confirm: (options) => context.ui.dialog.confirm(options),
             },
