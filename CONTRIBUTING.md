@@ -11,7 +11,7 @@ revision, the public API involved, and the user-visible behavior. No software ba
 yet; do not report untested compatibility as established behavior.
 
 Keep each pull request focused. Explain the reason, list the files changed, check relative links,
-and identify checks actually run. The development target is SDK `2.2.5`; recent local checks ran
+and identify checks actually run. The development target is SDK `2.2.6`; recent local checks ran
 with Node.js `26.13.0` and npm `11.21.1`:
 
 ```bash

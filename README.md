@@ -199,9 +199,9 @@ These are known gaps, not settled behavior:
 
 ## Development
 
-The development target is `@opencode/plugin@2.2.5`, with theme `2.2.5`, OpenTUI core/solid `0.8.0`
+The development target is `@opencode/plugin@2.2.6`, with theme `2.2.6`, OpenTUI core/solid `0.8.1`
 and Solid `1.9.17`, installed as exact development dependencies. Recent checks ran with Node.js
-`26.13.0` and npm `11.21.1`. The pinned `@opentui/core@0.8.0` declares Node.js `>=26.4.0` or Bun
+`26.13.0` and npm `11.21.1`. The pinned `@opentui/core@0.8.1` declares Node.js `>=26.4.0` or Bun
 `>=1.3.14`. The local checks use its types, not its terminal runtime. Updating the development
 machine's Node or Bun does not qualify or replace the runtime embedded in OpenCode.
 
