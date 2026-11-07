@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.3 — 2026-11-07
+
+First release tried in a real OpenCode installation (`2.2.5`, then `2.2.6`): the plugin loads, the
+footer appears, `/delegate status` answers, and the panel opens and saves the defaults. The rest of
+the host behavior is still unverified.
+
 ### Changed
 
 - `/delegate` opens one settings panel, as in Pi: each setting with its value, then
@@ -11,6 +17,10 @@
 ### Fixed
 
 - `/delegate` now appears in the slash autocomplete.
+- The settings editor no longer fails with "The saved settings could not be read". Its RPC schemas
+  used `pattern`, which OpenCode refuses when it converts plugin schemas, so every editor call failed.
+  A test now converts each RPC schema the way the host does. `0.1.0-alpha.1` and `0.1.0-alpha.2`
+  have this fault and are deprecated.
 
 ## 0.1.0-alpha.2 — 2026-11-06
 

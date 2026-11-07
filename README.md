@@ -3,10 +3,13 @@
 Delegation policy for OpenCode v2, with explicit roles and model selection. It ports the behavior of
 the Pi extension `pi-delegation-policy` 0.25 to the public plugin API of OpenCode `2.2.5`.
 
-**Experimental alpha `0.1.0-alpha.2`; not yet run inside OpenCode.** Every part has local tests
-against doubles of the host API, but loading, permissions, persistence and terminal rendering have
-not been observed in a real host. OpenCode `2.2.5` is the development target, not a supported or
-verified runtime. Use a setup you can recover; publishing this alpha does not establish compatibility.
+**Experimental alpha `0.1.0-alpha.3`.** It has been loaded in one OpenCode `2.2.5`/`2.2.6`
+installation, where the plugin loads, the footer appears, and `/delegate` opens the panel and saves
+the defaults. Applying to a session, agent registration, permission denial, provider requests and
+persistence across restarts have not been observed in a real host; every part has local tests
+against doubles of the host API. OpenCode `2.2.5` is the
+development target, not a supported or verified runtime. Use a setup you can recover; publishing
+this alpha does not establish compatibility.
 
 ## What it does
 
@@ -116,7 +119,7 @@ reference to the existing list, keeping other entries:
 
 ```jsonc
 {
-  "plugins": ["opencode-delegation-policy@0.1.0-alpha.2"]
+  "plugins": ["opencode-delegation-policy@0.1.0-alpha.3"]
 }
 ```
 
