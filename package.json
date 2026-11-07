@@ -49,7 +49,7 @@
     "check": "npm run format:check && npm run lint && npm run typecheck && npm run build && npm run test"
   },
   "peerDependencies": {
-    "@opencode/plugin": "2.2.5"
+    "@opencode/plugin": "2.2.6"
   },
   "peerDependenciesMeta": {
     "@opencode/plugin": {
@@ -58,10 +58,10 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.2.5",
-    "@opencode/plugin": "2.2.5",
-    "@opencode/theme": "2.2.5",
-    "@opentui/core": "0.8.0",
-    "@opentui/solid": "0.8.0",
+    "@opencode/plugin": "2.2.6",
+    "@opencode/theme": "2.2.6",
+    "@opentui/core": "0.8.1",
+    "@opentui/solid": "0.8.1",
     "@types/json-schema": "7.0.15",
     "@types/node": "24.9.1",
     "solid-js": "1.9.17",
