@@ -95,6 +95,9 @@ function readOnlyAdvisorSlots(numbers) {
     { action: "read", resource: "*", effect: "allow" },
     { action: "glob", resource: "*", effect: "allow" },
     { action: "grep", resource: "*", effect: "allow" },
+    { action: "read", resource: "*.env", effect: "deny" },
+    { action: "read", resource: "*.env.*", effect: "deny" },
+    { action: "read", resource: "*.env.example", effect: "allow" },
   ];
   return numbers.map((number) => ({
     id: `ocv2-advisor-${number}`,
@@ -154,8 +157,8 @@ test("setup registers the roles and advisors of the global defaults", async () =
   assert.equal(agent.agents.get("ocv2-small")?.model.id, "small-model");
   assert.equal(agent.agents.get("ocv2-advisor-1")?.mode, "subagent");
   assert.deepEqual(agent.agents.get("ocv2-advisor-1")?.permissions.at(-1), {
-    action: "grep",
-    resource: "*",
+    action: "read",
+    resource: "*.env.example",
     effect: "allow",
   });
 });

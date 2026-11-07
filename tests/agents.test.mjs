@@ -176,16 +176,17 @@ test("each advisor is registered under its own number with read-only tools", () 
   for (const definition of definitions) {
     assert.equal(definition.mode, "subagent");
     assert.match(definition.system, /advice only/);
-    // The read allows come last: an earlier rule would be overridden by the wildcard deny that
-    // closes every other action, because the last matching rule wins.
-    assert.deepEqual(
-      definition.permissions.slice(-ADVISOR_READ_ACTIONS.length),
-      [
-        { action: "read", resource: "*", effect: "allow" },
-        { action: "glob", resource: "*", effect: "allow" },
-        { action: "grep", resource: "*", effect: "allow" },
-      ],
-    );
+    // The read allows follow the wildcard deny, because the last matching rule wins; only the
+    // environment-file narrowing of `read` comes after them.
+    assert.deepEqual(definition.permissions.slice(-6), [
+      { action: "read", resource: "*", effect: "allow" },
+      { action: "glob", resource: "*", effect: "allow" },
+      { action: "grep", resource: "*", effect: "allow" },
+      { action: "read", resource: "*.env", effect: "deny" },
+      { action: "read", resource: "*.env.*", effect: "deny" },
+      { action: "read", resource: "*.env.example", effect: "allow" },
+    ]);
+    assert.equal(ADVISOR_READ_ACTIONS.length, 3);
     // Every other action is denied explicitly, and the wildcard deny covers what the host or
     // another extension adds, including MCP tools named `<server>_<tool>`.
     for (const action of ADVISOR_DENIED_ACTIONS) {
@@ -210,7 +211,8 @@ test("each advisor is registered under its own number with read-only tools", () 
         .filter((rule) => rule.effect === "allow")
         .map((rule) => rule.action)
         .sort(),
-      [...ADVISOR_READ_ACTIONS].sort(),
+      // The second `read` re-allows only `*.env.example` after the environment files are denied.
+      [...ADVISOR_READ_ACTIONS, "read"].sort(),
     );
   }
   assert.equal(advisorAgentID(2), "ocv2-advisor-2");
@@ -243,8 +245,8 @@ test("registering writes every defined field on the reserved ids", () => {
   assert.equal(agents.get("ocv2-small")?.model.id, "small-model");
   assert.equal(agents.get("ocv2-small")?.mode, "subagent");
   assert.deepEqual(agents.get("ocv2-advisor-1")?.permissions.at(-1), {
-    action: "grep",
-    resource: "*",
+    action: "read",
+    resource: "*.env.example",
     effect: "allow",
   });
 });

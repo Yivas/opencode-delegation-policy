@@ -27,6 +27,12 @@ const ADVISOR_PERMISSIONS: readonly AgentPermission[] = [
     resource: "*",
     effect: "allow" as const,
   })),
+  // The host's own default asks before reading environment files. An Advisor runs as a child that
+  // nobody is watching, so the same files are denied instead, keeping the example file readable.
+  // `grep` asks with its pattern, not a path, so this narrows `read` only; it is not confidentiality.
+  { action: "read", resource: "*.env", effect: "deny" as const },
+  { action: "read", resource: "*.env.*", effect: "deny" as const },
+  { action: "read", resource: "*.env.example", effect: "allow" as const },
 ];
 
 export type AgentModel = {
