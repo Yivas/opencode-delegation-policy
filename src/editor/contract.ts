@@ -170,12 +170,17 @@ export const editorReadInput = {
   required: ["scope"],
   additionalProperties: false,
 } as const;
+// The host turns these JSON Schemas into its own codecs and refuses `pattern` outright ("Patterns may
+// block validation and are disabled"), which fails every call with rpc.invalid_output or
+// rpc.invalid_input. The length bounds what crosses the wire; the client checks the hex form, and the
+// server accepts only the exact revision it issued.
+const revision = { type: "string", minLength: 64, maxLength: 64 } as const;
 const editorSnapshotSchema = {
   type: "object",
   properties: {
     ...editorTargetProperties,
     ok: { const: true },
-    revision: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    revision,
     view: {
       type: "object",
       properties: { preferences, provenance: sourceSchema },
@@ -215,7 +220,7 @@ export const editorChangeInput = {
   type: "object",
   properties: {
     ...editorTargetProperties,
-    revision: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    revision,
     change: {
       type: "object",
       properties: {
