@@ -10,10 +10,16 @@ export const AGENT_PREFIX = "ocv2-";
 
 const ADVISOR_PREFIX = `${AGENT_PREFIX}advisor-`;
 
-// Actions the host documents today. The wildcard rule covers anything else, and an action named by
-// the effective rules is checked too.
+// The only actions an advisor may perform, named after the built-in tools of OpenCode 2.2.6
+// (dc2ffcf8): `read` also lists a directory, `glob` matches names and `grep` searches content. The
+// host asks for `read` on a project-relative path and for `glob` and `grep` on the pattern, so a
+// resource rule cannot confine the last two to a set of paths.
+export const ADVISOR_READ_ACTIONS = ["read", "glob", "grep"] as const;
+
+// Every other action the built-in tools of 2.2.6 request. `edit` covers edit, write, patch and
+// worktree removal, `execute` is Code Mode, and an MCP tool asks for `<server>_<tool>`, which only
+// the wildcard rule covers. A tool with no action of its own, such as todo, is closed by it too.
 export const ADVISOR_DENIED_ACTIONS = [
-  "read",
   "edit",
   "shell",
   "execute",
@@ -22,7 +28,12 @@ export const ADVISOR_DENIED_ACTIONS = [
   "webfetch",
   "websearch",
   "external_directory",
+  "question",
 ] as const;
+
+export function isAdvisorReadAction(action: string): boolean {
+  return ADVISOR_READ_ACTIONS.some((allowed) => allowed === action);
+}
 
 export type AgentPermission = {
   readonly action: string;

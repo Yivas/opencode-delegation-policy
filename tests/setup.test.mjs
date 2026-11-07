@@ -89,11 +89,16 @@ function storagedefaults(records, defaults) {
 }
 
 // The advisor slots as the host reports them when nothing re-enabled an action.
-function deniedAdvisorSlots(numbers) {
-  const deny = [{ action: "*", resource: "*", effect: "deny" }];
+function readOnlyAdvisorSlots(numbers) {
+  const rules = [
+    { action: "*", resource: "*", effect: "deny" },
+    { action: "read", resource: "*", effect: "allow" },
+    { action: "glob", resource: "*", effect: "allow" },
+    { action: "grep", resource: "*", effect: "allow" },
+  ];
   return numbers.map((number) => ({
     id: `ocv2-advisor-${number}`,
-    permissions: deny,
+    permissions: rules,
   }));
 }
 
@@ -149,9 +154,9 @@ test("setup registers the roles and advisors of the global defaults", async () =
   assert.equal(agent.agents.get("ocv2-small")?.model.id, "small-model");
   assert.equal(agent.agents.get("ocv2-advisor-1")?.mode, "subagent");
   assert.deepEqual(agent.agents.get("ocv2-advisor-1")?.permissions.at(-1), {
-    action: "*",
+    action: "grep",
     resource: "*",
-    effect: "deny",
+    effect: "allow",
   });
 });
 
@@ -192,7 +197,7 @@ test("the agents the policy may name are the ones the host lists, on their regis
   assert.deepEqual(await wiring.agents(), []);
 });
 
-test("the policy excludes an advisor whose effective permissions are no longer advice-only", async () => {
+test("the policy excludes an advisor whose effective permissions are no longer read-only", async () => {
   const records = new Map();
   storagedefaults(
     records,
@@ -225,12 +230,13 @@ test("the policy excludes an advisor whose effective permissions are no longer a
     session: async () => ({}),
   });
   const advisor = agent.agents.get("ocv2-advisor-1");
-  const denied = advisor.permissions;
+  const readOnly = advisor.permissions;
   for (const permissions of [
-    [...denied, { action: "shell", resource: "*", effect: "allow" }],
-    [...denied, { action: "read", resource: "a-file", effect: "ask" }],
+    [...readOnly, { action: "shell", resource: "*", effect: "allow" }],
+    [...readOnly, { action: "subagent", resource: "*", effect: "ask" }],
+    [...readOnly, { action: "*", resource: "*", effect: "allow" }],
     undefined,
-    [...denied, { action: "shell", resource: "*", effect: "unknown" }],
+    [...readOnly, { action: "shell", resource: "*", effect: "unknown" }],
   ]) {
     advisor.permissions = permissions;
     assert.deepEqual((await wiring.agents()).map((entry) => entry.id).sort(), [
@@ -244,7 +250,13 @@ test("the policy excludes an advisor whose effective permissions are no longer a
     // This is a policy eligibility check, never an edit of the host's effective rules.
     assert.equal(advisor.permissions, permissions);
   }
-  advisor.permissions = denied;
+  advisor.permissions = readOnly;
+  assert.equal((await wiring.agents()).length, 3);
+  // Narrowing the read set is not a reason to drop the advisor: it cannot grant anything else.
+  advisor.permissions = [
+    ...readOnly,
+    { action: "read", resource: "*.env", effect: "deny" },
+  ];
   assert.equal((await wiring.agents()).length, 3);
 });
 
@@ -319,7 +331,7 @@ test("advisor safety reports an allow the host config appended", async () => {
             { action: "shell", resource: "*", effect: "allow" },
           ],
         },
-        ...deniedAdvisorSlots([2, 3]),
+        ...readOnlyAdvisorSlots([2, 3]),
         {
           id: "ocv2-small",
           permissions: [{ action: "*", resource: "*", effect: "allow" }],
@@ -353,7 +365,7 @@ test("advisor safety is empty before registering and after a clean registration"
   assert.deepEqual((await wiring.inspect()).advisors, []);
 
   await wiring.register();
-  listed = { data: deniedAdvisorSlots([1, 2, 3]) };
+  listed = { data: readOnlyAdvisorSlots([1, 2, 3]) };
 
   assert.deepEqual((await wiring.inspect()).advisors, []);
 });
@@ -376,6 +388,39 @@ test("an advisor missing from the effective catalog is reported", async () => {
   assert.deepEqual((await wiring.inspect()).advisors, [
     { kind: "unregistered", id: "ocv2-advisor-1" },
   ]);
+});
+
+test("an unreadable rule fails the advisor closed instead of being skipped", async () => {
+  const records = new Map();
+  storagedefaults(records, defaults());
+  const wiring = createWiring({
+    storage: storageDouble(records),
+    catalog: catalogDouble([
+      model("acme", "small-model"),
+      model("acme", "advisor-model"),
+    ]),
+    agentTransform: async () => ({ dispose: async () => {} }),
+    agentList: async () => ({
+      data: [
+        {
+          id: "ocv2-advisor-1",
+          permissions: [
+            { action: "*", resource: "*", effect: "deny" },
+            { action: "shell", resource: "*", effect: "sometimes" },
+          ],
+        },
+      ],
+    }),
+  });
+
+  await wiring.register();
+
+  // One unreadable rule could be the allow that reopens an action, so no partial list proves the
+  // advisor read-only, and the whole list is treated as empty: every action is then reported open.
+  const [issue] = (await wiring.inspect()).advisors;
+  assert.equal(issue.kind, "actions-not-denied");
+  assert.ok(issue.actions.includes("edit"));
+  assert.ok(issue.actions.includes("*"));
 });
 
 test("a malformed catalogue listing leaves advisor safety without effective agents", async () => {
@@ -485,7 +530,7 @@ test("a successful registration is reported as such", async () => {
       model("acme", "advisor-model"),
     ]),
     agentTransform: async () => ({ dispose: async () => {} }),
-    agentList: async () => ({ data: deniedAdvisorSlots([1, 2, 3]) }),
+    agentList: async () => ({ data: readOnlyAdvisorSlots([1, 2, 3]) }),
   });
 
   assert.equal((await wiring.inspect()).registration, "pending");
