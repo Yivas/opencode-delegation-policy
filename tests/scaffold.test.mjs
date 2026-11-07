@@ -48,6 +48,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
     emitted: [],
     parents: new Map(),
     hooks: [],
+    permissionHooks: [],
     events: [],
     subscriptions: 0,
   };
@@ -188,6 +189,21 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
       return { id: sessionID, parentID: state.parents.get(sessionID) };
     },
   };
+  const permission = {
+    async hook(name, callback) {
+      if (this !== permission)
+        throw new Error("permission.hook lost its receiver");
+      const entry = { name, callback };
+      state.permissionHooks.push(entry);
+      return {
+        dispose: async () => {
+          state.permissionHooks = state.permissionHooks.filter(
+            (candidate) => candidate !== entry,
+          );
+        },
+      };
+    },
+  };
   const rpc = {
     async register(definition, handlers) {
       if (this !== rpc) throw new Error("rpc.register lost its receiver");
@@ -214,6 +230,7 @@ function setupContext(models, { listFailure, disposeFailures = 0 } = {}) {
         if (key === "agent") return agent;
         if (key === "rpc") return rpc;
         if (key === "session") return session;
+        if (key === "permission") return permission;
         if (key === "event") return event;
         if (key === "app") return { version: "2.0.21" };
         throw new Error(`unexpected host domain access: ${String(key)}`);
@@ -494,6 +511,34 @@ test("/delegate log shows what was injected, from the plugin's own storage", asy
   assert.doesNotMatch(shown, /root/);
 });
 
+test("/delegate log shows what the guard refused, with no resource or prompt", async () => {
+  const { context, state } = setupContext([eligible({ enabled: true })]);
+  const cleanup = await delegationPolicy.setup(context);
+  try {
+    const [{ handlers }] = state.rpcs;
+    const [{ callback }] = state.permissionHooks;
+
+    // Nothing is active, so the plugin's own role is not offered by this session's policy.
+    const event = {
+      sessionID: "root",
+      agent: "build",
+      action: "subagent",
+      resources: ["ocv2-small"],
+      metadata: { prompt: SECRET },
+      effect: "ask",
+    };
+    await callback(event);
+    assert.equal(event.effect, "deny");
+    assert.match(event.message, /does not offer ocv2-small/);
+
+    const shown = (await handlers.run({ line: "log" })).text;
+    assert.match(shown, /refused subagent for ocv2-small/);
+    assert.doesNotMatch(shown, /root|sk-test/);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("the server registers no slash command of its own", async () => {
   const { context } = setupContext([eligible()]);
   // The double throws on any domain it does not model, `command` included.
@@ -512,6 +557,41 @@ test("setup hooks the main agent's requests only, and retires the hook", async (
 
   await cleanup();
   assert.equal(state.hooks.length, 0);
+});
+
+test("setup registers the permission guard and retires it with everything else", async () => {
+  const { context, state } = setupContext([eligible()]);
+  const cleanup = await delegationPolicy.setup(context);
+
+  assert.deepEqual(
+    state.permissionHooks.map((hook) => hook.name),
+    ["evaluate"],
+  );
+  const [{ handlers }] = state.rpcs;
+  assert.match((await handlers.run({ line: "" })).text, /Guard check: active/);
+
+  await cleanup();
+  assert.equal(state.permissionHooks.length, 0);
+});
+
+test("a host without the permission hook still runs, and the status says the guard is inactive", async () => {
+  const { context, state } = setupContext([eligible()]);
+  const withoutHook = new Proxy(context, {
+    get(target, key) {
+      if (key === "permission") return undefined;
+      return target[key];
+    },
+  });
+  const cleanup = await delegationPolicy.setup(withoutHook);
+
+  assert.equal(state.permissionHooks.length, 0);
+  const [{ handlers }] = state.rpcs;
+  assert.match(
+    (await handlers.run({ line: "" })).text,
+    /Guard check: the host does not offer the permission hook/,
+  );
+
+  await cleanup();
 });
 
 test("defaults saved through /delegate reach the main agent after a restart, not before", async () => {

@@ -1,6 +1,7 @@
 import type { AgentDefinition } from "../agents/register.js";
 import type { LogEntry } from "../log/local-log.js";
 import type { InjectionReport } from "../policy/inject.js";
+import type { GuardState } from "../policy/permission-guard.js";
 import { restrictToRegistered } from "../policy/registered.js";
 import type { TurnWatchState } from "../policy/turns.js";
 import type { AgentInspection } from "../setup.js";
@@ -56,6 +57,8 @@ export type DelegateCommandPorts = {
   readonly agents?: () => Promise<readonly AgentDefinition[]>;
   // What happened to the policy block on the latest request of the main agent.
   readonly injection?: () => InjectionReport;
+  // Whether the runtime guard is registered. The policy text alone stops nothing.
+  readonly guard?: () => GuardState;
   // Whether the host's event stream, which ends notice turns, is being read.
   readonly turns?: () => TurnWatchState;
   // The newest entries of the local, content-free log.
@@ -436,6 +439,7 @@ export async function describePreferenceView(
   );
   lines.push(...(await describeAgents(ports.inspect)));
   lines.push(describeInjection(ports.injection));
+  lines.push(describeGuard(ports.guard));
   if (ports.turns !== undefined && ports.turns() !== "listening") {
     lines.push(
       "Notice check: the host's event stream is not being read, so a change notice repeats until it returns.",
@@ -624,9 +628,19 @@ function describeInjection(
   return `Policy check (latest request handled, any session): ${INJECTION_TEXT[key]}${kind}`;
 }
 
+// What the guard does, and what is left when the host has no hook to do it with. Silence would read
+// as enforcement that is not there.
+function describeGuard(guard: DelegateCommandPorts["guard"]): string {
+  if (guard === undefined) return "Guard check: not available.";
+  return guard() === "active"
+    ? "Guard check: active; a launch the session does not offer and an Advisor's non-read actions are refused at runtime."
+    : "Guard check: the host does not offer the permission hook, so nothing is refused at runtime.";
+}
+
 const LOG_LINES = 20;
 
-// The log holds no content, so it can be shown as it is: what was injected and what was launched.
+// The log holds no content, so it can be shown as it is: what was injected, what was launched and what
+// the guard refused.
 async function describeLog(log: DelegateCommandPorts["log"]): Promise<string> {
   if (log === undefined) return "The local log is not available.";
   let entries: readonly LogEntry[];
@@ -638,12 +652,19 @@ async function describeLog(log: DelegateCommandPorts["log"]): Promise<string> {
   if (entries.length === 0) return "The local log is empty.";
   return [
     `Newest ${entries.length} entries of the local log (no prompts, answers or session ids are kept):`,
-    ...entries.map((entry) =>
-      entry.kind === "policy"
-        ? `${entry.at} policy ${entry.hash}: intensity ${entry.intensity}, advisor ${entry.advisorMode}, preference ${entry.preference}`
-        : `${entry.at} launch ${entry.agent}${entry.background ? " (background)" : ""}: ${entry.outcome} after ${entry.ms} ms`,
-    ),
+    ...entries.map(describeLogEntry),
   ].join("\n");
+}
+
+function describeLogEntry(entry: LogEntry): string {
+  switch (entry.kind) {
+    case "policy":
+      return `${entry.at} policy ${entry.hash}: intensity ${entry.intensity}, advisor ${entry.advisorMode}, preference ${entry.preference}`;
+    case "launch":
+      return `${entry.at} launch ${entry.agent}${entry.background ? " (background)" : ""}: ${entry.outcome} after ${entry.ms} ms`;
+    case "denial":
+      return `${entry.at} refused ${entry.action} for ${entry.agent}`;
+  }
 }
 
 function describeIssues(issues: readonly ValidationIssue[]): string {

@@ -41,6 +41,17 @@ export type AgentPermission = {
   readonly effect: "allow" | "deny" | "ask";
 };
 
+// The host's own default asks before reading an environment file. An Advisor runs as a child that
+// nobody is watching, so the same files are denied instead, keeping the example file readable.
+// `grep` asks with its pattern, not a path, so this narrows `read` only; it is not confidentiality.
+// Order matters as everywhere in these rules: the last matching rule wins, so the example file is
+// allowed after the two denies. The guard reads the same list, so the two cannot disagree.
+export const ADVISOR_ENVIRONMENT_RULES: readonly AgentPermission[] = [
+  { action: "read", resource: "*.env", effect: "deny" },
+  { action: "read", resource: "*.env.*", effect: "deny" },
+  { action: "read", resource: "*.env.example", effect: "allow" },
+];
+
 // Typed by RoleKey on purpose: adding a role without an entry here becomes a compile error instead
 // of an agent that is silently never registered.
 export const ROLE_AGENTS: Readonly<

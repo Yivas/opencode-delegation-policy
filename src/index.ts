@@ -5,6 +5,7 @@ import { createPreferenceEditor } from "./editor/server.js";
 import { footerState } from "./footer-state.js";
 import { createLocalLog } from "./log/local-log.js";
 import { createPolicyInjector } from "./policy/inject.js";
+import { createPermissionGuard } from "./policy/permission-guard.js";
 import { watchTurns } from "./policy/turns.js";
 import { delegateRpc } from "./rpc.js";
 import { createWiring } from "./setup.js";
@@ -38,6 +39,24 @@ const delegationPolicy: Plugin.Plugin = {
       storage: context.storage,
       hostVersion: context.app.version,
     });
+    // The runtime half of the policy: a launch the session does not offer, and an Advisor kept to
+    // reading, are refused here instead of only being described in the block. A host that does not
+    // offer the permission hook still runs the plugin, and the status says the guard is not active.
+    const permission = context.permission as
+      | Plugin.Context["permission"]
+      | undefined;
+    const permissionHook = permission?.hook.bind(permission);
+    const guard = createPermissionGuard({
+      store: wiring.store,
+      catalog: context.model,
+      agents: () => wiring.agents(),
+      session: (sessionID) => context.session.get({ sessionID }),
+      denied: (denial) => log.denial(denial),
+      hook:
+        permissionHook === undefined
+          ? undefined
+          : (callback) => permissionHook("evaluate", callback),
+    });
     // The session's creation time, in the host's epoch milliseconds. Read only when a setting is
     // waiting for the next session.
     const createdAt = (sessionID: string) =>
@@ -56,6 +75,7 @@ const delegationPolicy: Plugin.Plugin = {
       inspect: () => wiring.inspect(),
       agents: () => wiring.agents(),
       injection: () => injector.last(),
+      guard: () => guard.state(),
       turns: () => turns?.state() ?? "stopped",
       log: (limit: number) => log.recent(limit),
       // A lookup that fails is read as "gone": nothing is written for a session the host cannot find.
@@ -103,6 +123,7 @@ const delegationPolicy: Plugin.Plugin = {
           hookRegistration = undefined;
         });
       }
+      await attempt(() => guard.dispose());
       const handle = rpcRegistration;
       if (handle !== undefined) {
         await attempt(async () => {
@@ -170,6 +191,7 @@ const delegationPolicy: Plugin.Plugin = {
       hookRegistration = await context.session.hook("context", (request) =>
         injector.apply(request),
       );
+      await guard.register();
       turns = watchTurns({
         subscribe: (options) => context.event.subscribe(options),
         ended: (sessionID, succeeded) =>

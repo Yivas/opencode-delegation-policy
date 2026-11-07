@@ -3,10 +3,11 @@ import type { Plugin } from "@opencode/plugin";
 import type { AdvisorSelection, RoleSelection } from "../validation/models.js";
 import {
   ADVISOR_DENIED_ACTIONS,
+  ADVISOR_ENVIRONMENT_RULES,
   ADVISOR_READ_ACTIONS,
+  type AgentPermission,
   advisorAgentID,
   ROLE_AGENTS,
-  type AgentPermission,
 } from "./ids.js";
 
 // `action` and `resource` accept full-value wildcards, the last matching rule wins, an agent's base
@@ -27,12 +28,7 @@ const ADVISOR_PERMISSIONS: readonly AgentPermission[] = [
     resource: "*",
     effect: "allow" as const,
   })),
-  // The host's own default asks before reading environment files. An Advisor runs as a child that
-  // nobody is watching, so the same files are denied instead, keeping the example file readable.
-  // `grep` asks with its pattern, not a path, so this narrows `read` only; it is not confidentiality.
-  { action: "read", resource: "*.env", effect: "deny" as const },
-  { action: "read", resource: "*.env.*", effect: "deny" as const },
-  { action: "read", resource: "*.env.example", effect: "allow" as const },
+  ...ADVISOR_ENVIRONMENT_RULES,
 ];
 
 export type AgentModel = {

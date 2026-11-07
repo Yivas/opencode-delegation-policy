@@ -16,6 +16,9 @@ const MAX_PENDING = 256;
 const MAX_WRITES = 64;
 const READ_TIMEOUT_MS = 1_000;
 const MAX_SCAN_PAGES = 20;
+// An action is a tool name. A longer string is not one the host offers, so a record carrying it is not
+// shown rather than displayed as it is.
+const MAX_ACTION_LENGTH = 64;
 const RESERVED_IDS = new Set(reservedAgentIDs());
 
 type LogStorage = Pick<Plugin.Context["storage"], "set" | "remove" | "scan">;
@@ -37,11 +40,19 @@ export type LogEntry = Stamp &
         readonly outcome: "completed" | "running" | "failed";
         readonly ms: number;
       }
+    // A denial of the runtime guard: the action it refused and the reserved agent it was about, never
+    // the resource, a prompt or a session.
+    | {
+        readonly kind: "denial";
+        readonly action: string;
+        readonly agent: string;
+      }
   );
 
 type Event = { readonly type: string; readonly data?: unknown };
 export type LocalLog = {
   policy(block: string, preferences: EffectivePreferences): void;
+  denial(denial: { readonly action: string; readonly agent: string }): void;
   observe(event: Event): void;
   flush(): Promise<void>;
   recent(limit: number): Promise<readonly LogEntry[]>;
@@ -107,6 +118,21 @@ function readEntry(value: unknown): LogEntry | undefined {
       background: entry.background,
       outcome: entry.outcome,
       ms: entry.ms,
+    };
+  }
+  if (
+    entry.kind === "denial" &&
+    typeof entry.action === "string" &&
+    entry.action !== "" &&
+    entry.action.length <= MAX_ACTION_LENGTH &&
+    typeof entry.agent === "string" &&
+    RESERVED_IDS.has(entry.agent)
+  ) {
+    return {
+      ...stamp,
+      kind: "denial",
+      action: entry.action,
+      agent: entry.agent,
     };
   }
   return undefined;
@@ -243,6 +269,9 @@ export function createLocalLog(ports: {
         advisorMode: preferences.advisorMode,
         preference: preferences.preference,
       });
+    },
+    denial({ action, agent }) {
+      write({ ...stamp(), kind: "denial", action, agent });
     },
     observe(event) {
       const id = field(event.data, "id");

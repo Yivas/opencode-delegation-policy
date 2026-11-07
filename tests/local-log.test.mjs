@@ -132,6 +132,48 @@ test("a launch of a plugin agent is logged with its outcome and no content", asy
   );
 });
 
+test("a guard denial is logged as the action and the reserved agent, and nothing else", async () => {
+  const storage = storageDouble();
+  const log = createLocalLog({ storage, hostVersion: "2.0.21" });
+
+  log.denial({ action: "read", agent: "ocv2-advisor-1" });
+  await log.flush();
+
+  assert.deepEqual(
+    { ...entries(storage)[0], at: undefined },
+    {
+      v: 2,
+      at: undefined,
+      kind: "denial",
+      host: "2.0.21",
+      action: "read",
+      agent: "ocv2-advisor-1",
+    },
+  );
+
+  // A stored record is shown only when it is what this writer produces: an agent outside the reserved
+  // ids, or an action longer than a tool name, is not a denial this plugin recorded.
+  storage.records.set(`${LOG_PREFIX}000000000009000-tampered`, {
+    v: 2,
+    at: "2026-11-05T00:00:00.000Z",
+    host: "2.0.21",
+    kind: "denial",
+    action: "read",
+    agent: "user-agent",
+  });
+  storage.records.set(`${LOG_PREFIX}000000000009001-tampered`, {
+    v: 2,
+    at: "2026-11-05T00:00:00.000Z",
+    host: "2.0.21",
+    kind: "denial",
+    action: `read ${SECRET}`.repeat(4),
+    agent: "ocv2-small",
+  });
+  const shown = await log.recent(10);
+  assert.equal(shown.length, 1);
+  assert.doesNotMatch(JSON.stringify(shown), /private prompt|user-agent/);
+});
+
 test("launches of agents that are not the plugin's, and other tools, are not logged", async () => {
   const storage = storageDouble();
   const log = createLocalLog({ storage, hostVersion: "2.0.21" });
