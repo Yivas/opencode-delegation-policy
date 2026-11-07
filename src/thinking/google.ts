@@ -10,8 +10,8 @@ import type { ThinkingLevel } from "./policies.js";
 // dist/providers/data/google.json and google-vertex.json for the per-id thinkingLevelMap. The 1.1.0 archive
 // carries the same maps and the same budget and level code for these ids. The SDK is @google/genai 2.21.0:
 // dist/genai.d.ts ThinkingConfig and ThinkingLevel. OpenCode's native gemini reader is
-// packages/ai/src/protocols/gemini.ts (OpenCode 9bbb8ce1, blob be9e929c) with fitThinkingBudget in shared.ts
-// (blob 7f0d8667).
+// packages/ai/src/protocols/gemini.ts (opencode@dc2ffcf8, blob 0a9feee9) with fitThinkingBudget in shared.ts
+// (blob 47414d12, same formula as 9bbb8ce1).
 //
 // Pending is not unsupported. A budget control (positive, -1 or 0) depends on the final request cap and on
 // includeThoughts, which this module cannot know; it stays a conditional candidate until a public runtime
@@ -321,8 +321,8 @@ register(
   DYNAMIC,
 );
 
-// The package names are OpenCode's public provider packages (packages/core/src/variant.ts at 9bbb8ce1, blob
-// 5d672822, PROTOCOLS); providerIDs "google" and "google-vertex" are the public Provider.ID names. Dispatch is by
+// The package names are OpenCode's public provider packages (packages/core/src/variant.ts at dc2ffcf8, blob
+// c2c81214, PROTOCOLS); providerIDs "google" and "google-vertex" are the public Provider.ID names. Dispatch is by
 // package only; the host's model id is never canonicalized here.
 export function googleApiForPackage(
   packageName: unknown,

@@ -2181,7 +2181,9 @@ test("budget-only variants make a fixed level unmapped, distinct from unsupporte
   });
 });
 
-test("native OpenRouter effort fields do not admit a model-specific role", async () => {
+// The router forwards `reasoning.effort` unchanged, so the host's own default effort values admit a
+// role. This is a translation proof only: the upstream model behind the router stays unverified.
+test("an OpenRouter effort overlay admits the role at that level", async () => {
   const result = await validateSmallWithFixed(
     "high",
     "openrouter/synthetic-unknown-model",
@@ -2197,13 +2199,65 @@ test("native OpenRouter effort fields do not admit a model-specific role", async
     ),
   );
 
-  assert.deepEqual(result.delegation, {
-    status: "error",
-    issues: [
-      { role: "small", field: "thinking", code: "thinking-unmapped" },
-      { field: "roles", code: "no-ordinary-role" },
+  assert.equal(result.delegation.status, "active");
+  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
+    kind: "options",
+    options: [
+      {
+        variant: "high",
+        transportKind: "native",
+        compatibleLevels: ["high"],
+        admittedLevels: ["high"],
+      },
     ],
   });
+});
+
+test("an OpenRouter disabled-reasoning overlay admits off", async () => {
+  const result = await validateSmallWithFixed(
+    "off",
+    "openrouter/synthetic-unknown-model",
+    familyCatalog(
+      [{ id: "none", settings: { reasoning: { enabled: false } } }],
+      "synthetic-unknown-model",
+      { package: "@opencode/ai/providers/openrouter" },
+    ),
+  );
+
+  assert.equal(result.delegation.status, "active");
+  assert.deepEqual(withoutEvidence(result.delegation.roles[0].thinking), {
+    kind: "options",
+    options: [
+      {
+        variant: "none",
+        transportKind: "binary",
+        compatibleLevels: ["off"],
+        admittedLevels: ["off"],
+      },
+    ],
+  });
+});
+
+// A toggle-on names no level, and an effort value the host does not default to stays unproven.
+test("an OpenRouter toggle-on or non-default effort stays unmapped", async () => {
+  for (const variant of [
+    { id: "thinking", settings: { reasoning: { enabled: true } } },
+    { id: "max", settings: { reasoning: { effort: "max" } } },
+  ]) {
+    const result = await validateSmallWithFixed(
+      "high",
+      "openrouter/synthetic-unknown-model",
+      familyCatalog([variant], "synthetic-unknown-model", {
+        package: "@opencode/ai/providers/openrouter",
+      }),
+    );
+
+    assert.deepEqual(result.delegation.issues[0], {
+      role: "small",
+      field: "thinking",
+      code: "thinking-unmapped",
+    });
+  }
 });
 
 test("a DeepSeek catalogue recipe remains eligible for role thinking", async () => {

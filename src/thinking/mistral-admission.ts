@@ -93,7 +93,7 @@ export function admitMistralVariant(
         sourceScope: "pi-model-recipe",
         transportKind: "native",
         compatibleLevels: off ? OFF_LEVELS : POSITIVE_LEVELS,
-        evidence: `${MISTRAL_SOURCE_SCOPE}; providers/data/mistral.json ${row.protocolModelID}; opencode@9bbb8ce1 packages/ai/src/protocols/mistral-chat.ts (conditional source recipe, not final wire)`,
+        evidence: `${MISTRAL_SOURCE_SCOPE}; providers/data/mistral.json ${row.protocolModelID}; opencode@dc2ffcf8 packages/ai/src/protocols/mistral-chat.ts (conditional source recipe, not final wire)`,
       },
     };
   } catch {
