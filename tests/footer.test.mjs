@@ -301,6 +301,28 @@ test("the server state follows what the injection would attach", async () => {
   });
 });
 
+test("at home the footer describes the next session, not only the defaults", async () => {
+  const store = await configuredStore();
+  const ports = {
+    store,
+    catalog,
+    agents: async () => REGISTERED,
+    parentOf: async () => undefined,
+  };
+
+  await store.saveNext({ intensity: "normal" });
+  assert.deepEqual(await footerState(ports, undefined), {
+    delegation: "NORM",
+    advisor: "ON",
+  });
+
+  await store.saveNext({ intensity: "off" });
+  assert.deepEqual(await footerState(ports, undefined), {
+    delegation: "OFF",
+    advisor: "ON",
+  });
+});
+
 test("the footer is appended to the host's prompt footer, never replacing it, and released on cleanup", async () => {
   const claims = [];
   let released = 0;

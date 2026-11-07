@@ -8,7 +8,16 @@ import { runDelegateInTui } from "../dist/tui.js";
 
 // One value column: the longest label ("Visual Design thinking", 22 characters) plus two spaces.
 const VALUE_COLUMN = 24;
-const ACTIONS = new Set(["apply", "save", "reload", "status", "log", "close"]);
+const ACTIONS = new Set([
+  "apply",
+  "save",
+  "next",
+  "clear-next",
+  "reload",
+  "status",
+  "log",
+  "close",
+]);
 
 function aligned(label, value) {
   return label.padEnd(VALUE_COLUMN) + value;
@@ -359,6 +368,50 @@ test("a session panel shows the effective values and offers following the defaul
     description: "Drop this session's value and follow the defaults.",
   });
   assert.equal(values.current, "normal");
+});
+
+test("the start panel shows the values the next session would use, named as such", async () => {
+  const f = fixture(["close"]);
+  await f.store.saveDefaults({ intensity: "normal" });
+  await f.store.saveNext({ preference: "efficient" });
+
+  await f.panel();
+  f.assertConsumed();
+
+  const main = f.shown[0];
+  const row = (value) => main.options.find((option) => option.value === value);
+  assert.equal(row("preference").title, aligned("Preference", "efficient"));
+  assert.equal(row("preference").footer, "next session");
+  assert.equal(row("intensity").title, aligned("Intensity", "normal"));
+  assert.equal(row("intensity").footer, "defaults");
+  assert.equal(row("next").title, "Apply to next session");
+  assert.equal(row("clear-next").title, "Clear next session");
+});
+
+test("Apply to next session stores the draft for the next session, and Clear drops it", async () => {
+  const f = fixture(["intensity", "aggressive", "next", "close"]);
+
+  await f.panel();
+  f.assertConsumed();
+
+  const saved = await f.store.readNext();
+  assert.equal(saved.status, "pending");
+  assert.equal(saved.view.preferences.intensity, "aggressive");
+  // The panel reopened after the save and now shows it as the next session's own value.
+  const reopened = f.shown
+    .filter((dialog) => dialog.title.startsWith("Delegation"))
+    .at(-1);
+  const intensity = reopened.options.find(
+    (option) => option.value === "intensity",
+  );
+  assert.equal(intensity.title, aligned("Intensity", "aggressive"));
+  assert.equal(intensity.footer, "next session");
+
+  const g = fixture(["clear-next", "close"]);
+  await g.store.saveNext({ intensity: "aggressive" });
+  await g.panel();
+  g.assertConsumed();
+  assert.equal((await g.store.readNext()).status, "none");
 });
 
 test("Status and the local log run the typed line and return to the panel", async () => {

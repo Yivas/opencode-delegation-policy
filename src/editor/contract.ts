@@ -1,7 +1,9 @@
 import type { PreferenceView } from "../state/effective.js";
 import { ADVISOR_MODES, INTENSITIES, PREFERENCES } from "../state/schema.js";
 
-export type EditorScope = "defaults" | "session";
+// "next" is the setting the next session starts with: the scalars only, since models are shared by
+// every session and belong to the defaults.
+export type EditorScope = "defaults" | "next" | "session";
 export type EditorTarget = {
   readonly scope: EditorScope;
   readonly sessionID?: string;
@@ -16,7 +18,10 @@ export type EditorSnapshot = EditorTarget & {
   readonly view: PreferenceView;
   readonly models: readonly EditorModel[];
   readonly text: string;
+  // Only the "next" scope sets it: whether a setting is waiting, and whether it can be read at all.
+  readonly pending?: PendingStatus;
 };
+export type PendingStatus = "none" | "pending" | "unreadable";
 
 const role = {
   anyOf: [
@@ -161,7 +166,7 @@ const preferences = {
 } as const;
 
 export const editorTargetProperties = {
-  scope: { type: "string", enum: ["defaults", "session"] },
+  scope: { type: "string", enum: ["defaults", "next", "session"] },
   sessionID: { type: "string", minLength: 1, maxLength: 128 },
 } as const;
 export const editorReadInput = {
@@ -203,6 +208,7 @@ const editorSnapshotSchema = {
       },
     },
     text: { type: "string" },
+    pending: { type: "string", enum: ["none", "pending", "unreadable"] },
   },
   required: ["ok", "scope", "revision", "view", "models", "text"],
   additionalProperties: false,

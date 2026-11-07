@@ -74,8 +74,22 @@ const SOURCES: Readonly<Record<PreferenceSource, string>> = {
   session: "this session",
 };
 
-function provenance(source: PreferenceSource, changed: boolean): string {
-  return changed ? `${SOURCES[source]} · changed` : SOURCES[source];
+// The start panel describes the session that would open next, so a value saved for it is not "this
+// session": the same provenance, named for the session it belongs to.
+function sourceNames(
+  scope: EditorScope,
+): Readonly<Record<PreferenceSource, string>> {
+  return scope === "defaults"
+    ? { ...SOURCES, session: "next session" }
+    : SOURCES;
+}
+
+function provenance(
+  source: PreferenceSource,
+  changed: boolean,
+  names: Readonly<Record<PreferenceSource, string>>,
+): string {
+  return changed ? `${names[source]} · changed` : names[source];
 }
 
 function roleText(setting: RoleSetting): string {
@@ -115,11 +129,13 @@ type PanelDraft = {
 
 type PanelState = {
   readonly defaults: EditorSnapshot;
+  // Read only for the start panel: the values the next session would start with.
+  readonly next?: EditorSnapshot;
   readonly session?: EditorSnapshot;
 };
 
 function effective(state: PanelState): EditorSnapshot {
-  return state.session ?? state.defaults;
+  return state.session ?? state.next ?? state.defaults;
 }
 
 function hasDraft(draft: PanelDraft): boolean {
@@ -133,6 +149,57 @@ function sessionChange(draft: PanelDraft): SessionPreferenceChange | undefined {
       ? {}
       : { advisorMode: draft.advisorMode }),
     ...(draft.preference === undefined ? {} : { preference: draft.preference }),
+  };
+  return Object.keys(change).length === 0 ? undefined : change;
+}
+
+// The pending setting is written whole, so the draft is merged over the values the panel shows: a row
+// the person did not touch keeps the pending value it already had, and choosing "follow defaults"
+// drops it. Undefined means the draft changes no scalar, so there is nothing to save.
+function nextChange(
+  draft: PanelDraft,
+  shown: EditorSnapshot | undefined,
+): SessionPreferenceChange | undefined {
+  if (shown === undefined) return undefined;
+  if (
+    draft.intensity === undefined &&
+    draft.advisorMode === undefined &&
+    draft.preference === undefined
+  ) {
+    return undefined;
+  }
+  const kept = <T extends string>(
+    field: "intensity" | "advisorMode" | "preference",
+    drafted: T | "inherit" | undefined,
+    current: T,
+  ): T | "inherit" | undefined =>
+    drafted ??
+    (shown.view.provenance[field] === "session" ? current : undefined);
+  const values = {
+    intensity: kept(
+      "intensity",
+      draft.intensity,
+      shown.view.preferences.intensity,
+    ),
+    advisorMode: kept(
+      "advisorMode",
+      draft.advisorMode,
+      shown.view.preferences.advisorMode,
+    ),
+    preference: kept(
+      "preference",
+      draft.preference,
+      shown.view.preferences.preference,
+    ),
+  };
+  const change: SessionPreferenceChange = {
+    ...(values.intensity === undefined ? {} : { intensity: values.intensity }),
+    ...(values.advisorMode === undefined
+      ? {}
+      : { advisorMode: values.advisorMode }),
+    ...(values.preference === undefined
+      ? {}
+      : { preference: values.preference }),
   };
   return Object.keys(change).length === 0 ? undefined : change;
 }
@@ -165,7 +232,7 @@ function clearSaved(
   scope: EditorScope,
   session?: PreferenceView["provenance"],
 ): PanelDraft {
-  if (scope === "session")
+  if (scope === "session" || scope === "next")
     return {
       ...(draft.roles === undefined ? {} : { roles: draft.roles }),
       ...(draft.thinking === undefined ? {} : { thinking: draft.thinking }),
@@ -402,8 +469,10 @@ export async function runDelegatePanel(
   };
   const loadState = async (): Promise<PanelState> => {
     const defaults = await readScope({ scope: "defaults" });
-    if (target.scope !== "session") return { defaults };
-    return { defaults, session: await readScope(target) };
+    if (target.scope === "session") {
+      return { defaults, session: await readScope(target) };
+    }
+    return { defaults, next: await readScope({ scope: "next" }) };
   };
   const edit = (next: PanelDraft) => {
     draft = next;
@@ -434,6 +503,18 @@ export async function runDelegatePanel(
       const shown = effective(state).view;
       const base = shown.preferences;
       const sources = shown.provenance;
+      const names = sourceNames(target.scope);
+      // A pending setting exists only in the start panel, and only its scalars can be dropped row by
+      // row; the models it never holds stay in the defaults.
+      const pendingStatus = state.next?.pending;
+      const followsDefaults = <
+        Key extends "intensity" | "advisorMode" | "preference",
+      >(
+        field: Key,
+      ): PreferenceView["preferences"][Key] | undefined =>
+        target.scope === "session" || sources[field] === "session"
+          ? state.defaults.view.preferences[field]
+          : undefined;
       const advisors = draft.advisors ?? base.advisors;
       const advisorModels =
         advisors.kind === "configured" ? advisors.models : [];
@@ -454,7 +535,11 @@ export async function runDelegatePanel(
         {
           title: row("Intensity", draft.intensity ?? base.intensity),
           value: "intensity",
-          footer: provenance(sources.intensity, draft.intensity !== undefined),
+          footer: provenance(
+            sources.intensity,
+            draft.intensity !== undefined,
+            names,
+          ),
         },
         {
           title: row("Advisor mode", draft.advisorMode ?? base.advisorMode),
@@ -462,6 +547,7 @@ export async function runDelegatePanel(
           footer: provenance(
             sources.advisorMode,
             draft.advisorMode !== undefined,
+            names,
           ),
         },
         {
@@ -470,6 +556,7 @@ export async function runDelegatePanel(
           footer: provenance(
             sources.preference,
             draft.preference !== undefined,
+            names,
           ),
         },
       ];
@@ -481,6 +568,7 @@ export async function runDelegatePanel(
           footer: provenance(
             sources.roles[role],
             draft.roles?.[role] !== undefined,
+            names,
           ),
         });
         if (setting.kind !== "configured") continue;
@@ -491,6 +579,7 @@ export async function runDelegatePanel(
           footer: provenance(
             sources.thinking[role],
             draft.thinking?.[role] !== undefined,
+            names,
           ),
         });
       }
@@ -498,14 +587,22 @@ export async function runDelegatePanel(
         rows.push({
           title: row(`Advisor ${index + 1}`, display(model)),
           value: `advisor:${index}`,
-          footer: provenance(sources.advisors, draft.advisors !== undefined),
+          footer: provenance(
+            sources.advisors,
+            draft.advisors !== undefined,
+            names,
+          ),
         });
       });
       if (advisorModels.length < MAX_ADVISORS)
         rows.push({
           title: row(`Advisor ${advisorModels.length + 1}`, "add"),
           value: "advisor:add",
-          footer: provenance(sources.advisors, draft.advisors !== undefined),
+          footer: provenance(
+            sources.advisors,
+            draft.advisors !== undefined,
+            names,
+          ),
         });
 
       const saveable = defaultsChange(draft) !== undefined;
@@ -518,13 +615,21 @@ export async function runDelegatePanel(
         : scalarChanged
           ? "intensity, Advisor mode and preference"
           : "no changes";
-      if (target.scope === "session")
+      if (target.scope === "session") {
         actions.push({
           title: "Apply to this session",
           value: "apply",
           disabled: blocked,
           description: `(${applyNote})`,
         });
+      } else {
+        actions.push({
+          title: "Apply to next session",
+          value: "next",
+          disabled: blocked,
+          description: `(${applyNote})`,
+        });
+      }
       actions.push({
         title: "Save as defaults",
         value: "save",
@@ -533,6 +638,16 @@ export async function runDelegatePanel(
           ? "(models and Advisors need a restart)"
           : "(no changes)",
       });
+      // Only the start panel has a pending setting to drop, and only while one is stored.
+      if (pendingStatus !== undefined && pendingStatus !== "none")
+        actions.push({
+          title: "Clear next session",
+          value: "clear-next",
+          description:
+            pendingStatus === "pending"
+              ? "Drop the setting saved for the next session."
+              : "Remove the saved setting that cannot be read.",
+        });
       if (blocked || offerReload)
         actions.push({
           title: "Reload saved settings",
@@ -615,12 +730,33 @@ export async function runDelegatePanel(
         continue;
       }
 
-      if (action === "apply" || action === "save") {
-        const scope: EditorScope = action === "apply" ? "session" : "defaults";
+      if (
+        action === "apply" ||
+        action === "save" ||
+        action === "next" ||
+        action === "clear-next"
+      ) {
+        const scope: EditorScope =
+          action === "apply"
+            ? "session"
+            : action === "save"
+              ? "defaults"
+              : "next";
         const change =
-          scope === "session" ? sessionChange(draft) : defaultsChange(draft);
-        const source = scope === "session" ? state.session : state.defaults;
-        if (scope === "session" && modelsChanged) {
+          scope === "session"
+            ? sessionChange(draft)
+            : scope === "defaults"
+              ? defaultsChange(draft)
+              : action === "clear-next"
+                ? {}
+                : nextChange(draft, state.next);
+        const source =
+          scope === "session"
+            ? state.session
+            : scope === "defaults"
+              ? state.defaults
+              : state.next;
+        if (scope !== "defaults" && modelsChanged) {
           await dialogs.alert({
             title: "Delegation",
             message:
@@ -630,7 +766,7 @@ export async function runDelegatePanel(
         }
         if (change === undefined || source === undefined) continue;
         const requestTarget: EditorTarget =
-          scope === "session" ? target : { scope: "defaults" };
+          scope === "session" ? target : { scope };
         // Preview and write carry the same draft, scope and revision: the server refuses a preview
         // against stale sources, and the write repeats that check under its own queue.
         const request: EditorChangeRequest = {
@@ -728,36 +864,21 @@ export async function runDelegatePanel(
       if (action === "intensity") {
         const value = await dialogs.select({
           title: "Intensity",
-          options: scalarOptions(
-            INTENSITIES,
-            target.scope === "session"
-              ? state.defaults.view.preferences.intensity
-              : undefined,
-          ),
+          options: scalarOptions(INTENSITIES, followsDefaults("intensity")),
           current: draft.intensity ?? base.intensity,
         });
         if (value !== undefined) edit({ ...draft, intensity: value });
       } else if (action === "advisorMode") {
         const value = await dialogs.select({
           title: "Advisor mode",
-          options: scalarOptions(
-            ADVISOR_MODES,
-            target.scope === "session"
-              ? state.defaults.view.preferences.advisorMode
-              : undefined,
-          ),
+          options: scalarOptions(ADVISOR_MODES, followsDefaults("advisorMode")),
           current: draft.advisorMode ?? base.advisorMode,
         });
         if (value !== undefined) edit({ ...draft, advisorMode: value });
       } else if (action === "preference") {
         const value = await dialogs.select({
           title: "Model preference",
-          options: scalarOptions(
-            PREFERENCES,
-            target.scope === "session"
-              ? state.defaults.view.preferences.preference
-              : undefined,
-          ),
+          options: scalarOptions(PREFERENCES, followsDefaults("preference")),
           current: draft.preference ?? base.preference,
         });
         if (value !== undefined) edit({ ...draft, preference: value });

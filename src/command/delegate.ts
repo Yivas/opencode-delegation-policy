@@ -18,7 +18,7 @@ import {
   type SessionPreferenceChange,
   type ThinkingSetting,
 } from "../state/schema.js";
-import type { PreferenceStore } from "../state/store.js";
+import type { NextSessionState, PreferenceStore } from "../state/store.js";
 import {
   type ModelCatalog,
   type ValidationIssue,
@@ -36,8 +36,10 @@ export type DelegateCommandPorts = {
   readonly store: Pick<
     PreferenceStore,
     | "readGlobal"
+    | "readNext"
     | "readSession"
     | "saveDefaults"
+    | "saveNext"
     | "applySession"
     | "resetSession"
     | "clearSession"
@@ -87,6 +89,12 @@ const USAGE = [
   "  /delegate reset                          turn this session's delegation and Advisor off",
   "  /delegate clear                          drop this session's changes and follow the defaults",
   "",
+  "Usage, for the next session (the first one created after this):",
+  `  /delegate next <${INTENSITIES.join("|")}>   set what the next session starts with`,
+  `  /delegate next advisor <${ADVISOR_MODES.join("|")}>`,
+  `  /delegate next preference <${PREFERENCES.join("|")}>`,
+  "  /delegate next clear                     discard the setting saved for the next session",
+  "",
   "Usage, for the defaults of every session:",
   `  /delegate defaults <intensity|advisor-mode|preference> <value>`,
   `  /delegate defaults role <${ROLE_LIST}> <provider/model[#variant]|off|unset>`,
@@ -121,6 +129,7 @@ type Request =
   | { readonly kind: "log" }
   | { readonly kind: "defaults"; readonly change: GlobalPreferenceChange }
   | { readonly kind: "session"; readonly change: SessionPreferenceChange }
+  | { readonly kind: "next"; readonly change: SessionPreferenceChange }
   | { readonly kind: "reset" }
   | { readonly kind: "clear" };
 
@@ -137,23 +146,36 @@ export async function runDelegate(
   const sessionID = scope.sessionID;
   try {
     switch (request.kind) {
-      case "status":
-        return sessionID === undefined
-          ? await describePreferenceView(
-              await ports.store.readGlobal(),
-              ports,
-              "No session is open; these are the defaults.",
-            )
-          : await describePreferenceView(
-              await ports.store.readSession(sessionID),
-              ports,
-              "This session:",
-            );
+      case "status": {
+        if (sessionID !== undefined) {
+          return await describePreferenceView(
+            await ports.store.readSession(sessionID),
+            ports,
+            "This session:",
+          );
+        }
+        // At home the defaults are the subject, and what the next session would get is reported
+        // separately: it is a saved setting, not a default.
+        const next = describeNextSession(await ports.store.readNext());
+        const defaults = await describePreferenceView(
+          await ports.store.readGlobal(),
+          ports,
+          "No session is open; these are the defaults.",
+        );
+        return next === undefined ? defaults : `${defaults}\n\n${next}`;
+      }
       case "defaults":
         return await describePreferenceView(
           await ports.store.saveDefaults(request.change),
           ports,
           "Defaults saved.",
+        );
+      case "next":
+        return await describePreferenceView(
+          await ports.store.saveNext(request.change),
+          ports,
+          "Next session, saved:",
+          NEXT_SESSION_SOURCES,
         );
       default: {
         if (sessionID === undefined) return NO_SESSION;
@@ -207,24 +229,26 @@ function parseRequest(line: string): Request | string {
   if (first === "log" && rest.length === 0) return { kind: "log" };
   if (first === "reset" && rest.length === 0) return { kind: "reset" };
   if (first === "clear" && rest.length === 0) return { kind: "clear" };
-  if (isOneOf(INTENSITIES, first) && rest.length === 0) {
-    return { kind: "session", change: { intensity: first } };
+  const scalar = parseScalarChange(first, rest);
+  if (scalar !== undefined) {
+    return typeof scalar === "string"
+      ? scalar
+      : { kind: "session", change: scalar };
   }
-  if (first === "advisor") {
-    const [typedMode, ...extra] = rest;
-    const mode = typedMode?.toLowerCase();
-    if (!isOneOf(ADVISOR_MODES, mode) || extra.length > 0) {
-      return `advisor takes one of: ${ADVISOR_MODES.join(", ")}.`;
+  if (first === "next") {
+    const [setting, ...values] = rest;
+    if (setting === undefined) {
+      return "next needs a setting: an intensity, advisor, preference or clear.";
     }
-    return { kind: "session", change: { advisorMode: mode } };
-  }
-  if (first === "preference") {
-    const [typedValue, ...extra] = rest;
-    const value = typedValue?.toLowerCase();
-    if (!isOneOf(PREFERENCES, value) || extra.length > 0) {
-      return `preference takes one of: ${PREFERENCES.join(", ")}.`;
+    // An empty change is what removes the pending setting, so "clear" needs no separate kind.
+    if (setting.toLowerCase() === "clear" && values.length === 0) {
+      return { kind: "next", change: {} };
     }
-    return { kind: "session", change: { preference: value } };
+    const change = parseScalarChange(setting, values);
+    if (change === undefined) {
+      return "next takes an intensity, advisor, preference or clear.";
+    }
+    return typeof change === "string" ? change : { kind: "next", change };
   }
   if (first === "defaults") {
     const [setting, ...values] = rest;
@@ -233,6 +257,34 @@ function parseRequest(line: string): Request | string {
     return typeof change === "string" ? change : { kind: "defaults", change };
   }
   return `Unknown subcommand "${typed}".`;
+}
+
+// The three settings a session and the next session share. Undefined means the first word is not one
+// of them, so the caller keeps looking; a string is the reason the value cannot be understood.
+function parseScalarChange(
+  setting: string | undefined,
+  rest: readonly string[],
+): SessionPreferenceChange | string | undefined {
+  if (isOneOf(INTENSITIES, setting) && rest.length === 0) {
+    return { intensity: setting };
+  }
+  if (setting === "advisor") {
+    const [typedMode, ...extra] = rest;
+    const mode = typedMode?.toLowerCase();
+    if (!isOneOf(ADVISOR_MODES, mode) || extra.length > 0) {
+      return `advisor takes one of: ${ADVISOR_MODES.join(", ")}.`;
+    }
+    return { advisorMode: mode };
+  }
+  if (setting === "preference") {
+    const [typedValue, ...extra] = rest;
+    const value = typedValue?.toLowerCase();
+    if (!isOneOf(PREFERENCES, value) || extra.length > 0) {
+      return `preference takes one of: ${PREFERENCES.join(", ")}.`;
+    }
+    return { preference: value };
+  }
+  return undefined;
 }
 
 // Lower-cases a named value; a model reference passes through as typed.
@@ -345,13 +397,21 @@ const SOURCE_NAMES: Readonly<Record<PreferenceSource, string>> = {
   session: "session",
 };
 
+// The same view, named for the session it describes: a pending value is not this session's.
+export const NEXT_SESSION_SOURCES: Readonly<Record<PreferenceSource, string>> =
+  {
+    ...SOURCE_NAMES,
+    session: "next session",
+  };
+
 export async function describePreferenceView(
   view: PreferenceView,
   ports: DelegateCommandPorts,
   heading: string,
+  sources: Readonly<Record<PreferenceSource, string>> = SOURCE_NAMES,
 ): Promise<string> {
   const { preferences, provenance } = view;
-  const from = (source: PreferenceSource) => ` (${SOURCE_NAMES[source]})`;
+  const from = (source: PreferenceSource) => ` (${sources[source]})`;
   const lines: string[] = [heading];
 
   lines.push(
@@ -386,6 +446,23 @@ export async function describePreferenceView(
     "Agents are created when OpenCode starts, from the defaults; restart it after changing roles, Advisors or thinking.",
   );
   return lines.join("\n");
+}
+
+// The pending setting is reported even when nothing is waiting, so a person who saved one and then
+// wonders where it went has an answer. A damaged one is named by its code: it is never claimed.
+function describeNextSession(state: NextSessionState): string | undefined {
+  if (state.status === "none") return undefined;
+  if (state.status === "unreadable") {
+    return [
+      `Next session: the saved setting cannot be read (${state.code}), so no session will claim it; the next session uses the defaults.`,
+      "Save it again from /delegate to replace it, or discard it with /delegate next clear.",
+    ].join("\n");
+  }
+  const { preferences } = state.view;
+  return [
+    `Next session (saved ${new Date(state.savedAt).toISOString()}): intensity ${preferences.intensity}, Advisor mode ${preferences.advisorMode}, preference ${preferences.preference}.`,
+    "The first root session created after that time takes these values as its own and the saved setting is removed. /delegate next clear discards it.",
+  ].join("\n");
 }
 
 function describeThinking(setting: ThinkingSetting): string {

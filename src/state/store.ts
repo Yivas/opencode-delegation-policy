@@ -8,11 +8,15 @@ import {
   resolvePreferences,
 } from "./effective.js";
 import {
+  CURRENT_SCHEMA_VERSION,
   type GlobalPreferenceChange,
   type GlobalPreferences,
+  type PendingNextSession,
   PreferenceStateError,
+  type PreferenceStateErrorCode,
   parseGlobalChange,
   parseGlobalPreferences,
+  parsePendingNextSession,
   parseSessionChange,
   parseSessionPreferences,
   type SessionPreferenceChange,
@@ -35,6 +39,7 @@ export type PreferenceStorage = Pick<
 // lowercase letters, digits, dots and nothing that could collide with another session.
 const GLOBAL_KEY = "preferences.v1.global";
 const SESSION_KEY_PREFIX = "preferences.v1.session.";
+const NEXT_KEY = "preferences.v1.next";
 const MAX_SESSION_ID_BYTES = 128;
 const SESSION_ID_RULE = `session identifiers must be well-formed text of 1 to ${MAX_SESSION_ID_BYTES} UTF-8 bytes`;
 
@@ -46,6 +51,40 @@ export type PreferenceSnapshot = {
   readonly sessionID?: string;
   readonly view: PreferenceView;
 };
+
+// What the next session would use. A pending document this build cannot read is reported instead of
+// thrown: it is never claimed, so the next session falls back to the defaults, and the panel and the
+// status can say why it was ignored.
+export type NextSessionState =
+  | { readonly status: "none"; readonly view: PreferenceView }
+  | {
+      readonly status: "pending";
+      readonly savedAt: number;
+      readonly view: PreferenceView;
+    }
+  | {
+      readonly status: "unreadable";
+      readonly code: PreferenceStateErrorCode;
+      readonly view: PreferenceView;
+    };
+
+export type NextSessionSnapshot = NextSessionState & {
+  readonly revision: string;
+};
+
+// Why a session did not take the pending setting. Every value is a decision, not an error: the
+// setting stays where it is for a session that can claim it.
+export type PendingClaim =
+  | { readonly claimed: true; readonly view: PreferenceView }
+  | {
+      readonly claimed: false;
+      readonly reason:
+        | "no-pending"
+        | "unreadable-pending"
+        | "unknown-creation-time"
+        | "session-created-before-save"
+        | "session-has-settings";
+    };
 
 export class PreferenceStore {
   readonly #storage: PreferenceStorage;
@@ -117,6 +156,121 @@ export class PreferenceStore {
               change,
             ),
           );
+    });
+  }
+
+  // What the next session would use: the pending setting over the defaults.
+  readNext(): Promise<NextSessionState> {
+    return this.#serialize(async () => (await this.#loadNext()).state);
+  }
+
+  // The pending scope for the editor. Its revision covers the defaults and the stored pending
+  // document, including one this build cannot read, so an explicit save can replace a damaged one
+  // while a concurrent change to either still refuses the draft.
+  readNextForEdit(): Promise<NextSessionSnapshot> {
+    return this.#serialize(async () => {
+      const { stored, global, state } = await this.#loadNext();
+      return { ...state, revision: this.#nextRevision(global, stored) };
+    });
+  }
+
+  previewNextForEdit(
+    revision: string,
+    change: unknown,
+  ): Promise<PreferenceView> {
+    return this.#serialize(async () => {
+      const { stored, global } = await this.#loadNext();
+      this.#expectNextRevision(revision, global, stored);
+      return resolvePreferences(
+        global,
+        parseSessionChange(INHERITING_SESSION_PREFERENCES, change),
+      );
+    });
+  }
+
+  // The pending setting is written whole. The panel merges its draft over what it read, so a partial
+  // change here would drop a value the person did not touch; an empty change removes the document,
+  // which is what choosing "follow defaults" in every row means. The previous document is not parsed:
+  // the revision already proves it is the one the caller read, and a damaged one must stay
+  // replaceable.
+  saveNext(
+    change: SessionPreferenceChange,
+    expectedRevision?: string,
+  ): Promise<PreferenceView> {
+    return this.#serialize(async () => {
+      const { stored, global } = await this.#loadNext();
+      if (expectedRevision !== undefined) {
+        this.#expectNextRevision(expectedRevision, global, stored);
+      }
+      const session = parseSessionChange(
+        INHERITING_SESSION_PREFERENCES,
+        change,
+      );
+      const scalars = pendingScalars(session);
+      if (scalars === undefined) {
+        if (stored !== undefined) await this.#remove(NEXT_KEY);
+        return resolvePreferences(global, undefined);
+      }
+      const document: PendingNextSession = {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        change: scalars,
+      };
+      await this.#write(NEXT_KEY, document);
+      return resolvePreferences(global, session);
+    });
+  }
+
+  // The one place a pending setting becomes a session's own values. The whole decision runs as one
+  // queued operation, so two sessions seen at the same moment cannot both claim it: the second finds
+  // nothing. `createdAt` is asked only once a readable pending exists, and only from inside the queue,
+  // so the creation time is compared against the document this operation is about to consume.
+  //
+  // The claim writes the session document and then removes the pending one. A removal that fails
+  // leaves both, and a later session can claim the setting again; a crash between the two is the same
+  // case. Two plugin instances over the same storage are not coordinated at all: the store has no
+  // compare-and-set across processes, so both could claim. These are the limits of the host's
+  // storage, not of this sequence.
+  claimNextSession(
+    sessionID: string,
+    createdAt: () => Promise<number>,
+  ): Promise<PendingClaim> {
+    return this.#serialize(async () => {
+      const key = sessionKey(sessionID);
+      const { stored, global } = await this.#loadNext();
+      if (stored === undefined) return { claimed: false, reason: "no-pending" };
+      let pending: PendingNextSession;
+      try {
+        pending = parsePendingNextSession(stored, "stored");
+      } catch (error) {
+        if (!(error instanceof PreferenceStateError)) throw error;
+        return { claimed: false, reason: "unreadable-pending" };
+      }
+
+      let created: number;
+      try {
+        created = await createdAt();
+      } catch {
+        // Without the host's creation time nothing proves this session is newer than the setting.
+        return { claimed: false, reason: "unknown-creation-time" };
+      }
+      // A session that already existed when the setting was saved has had its turn; the pending waits
+      // for one created after it. Equal counts as after: both times come from this process's clock.
+      if (!(created >= pending.savedAt)) {
+        return { claimed: false, reason: "session-created-before-save" };
+      }
+      // A session with its own document was edited on purpose; the pending must not overwrite it.
+      if ((await this.#loadSession(key)) !== undefined) {
+        return { claimed: false, reason: "session-has-settings" };
+      }
+
+      const session = parseSessionChange(
+        INHERITING_SESSION_PREFERENCES,
+        pending.change,
+      );
+      await this.#write(key, session);
+      await this.#remove(NEXT_KEY);
+      return { claimed: true, view: resolvePreferences(global, session) };
     });
   }
 
@@ -201,6 +355,32 @@ export class PreferenceStore {
       .digest("hex");
   }
 
+  // The pending revision is separate from the editor's other revisions: the pending scope resolves
+  // against the defaults, so a defaults change invalidates its draft too. The stored document is
+  // hashed as it is, so a damaged one still has a revision that an explicit save can match.
+  #nextRevision(
+    global: GlobalPreferences | undefined,
+    stored: unknown,
+  ): string {
+    return createHash("sha256")
+      .update(this.#generation)
+      .update(JSON.stringify(["next", global ?? null, stored ?? null]))
+      .digest("hex");
+  }
+
+  #expectNextRevision(
+    expected: string,
+    global: GlobalPreferences | undefined,
+    stored: unknown,
+  ): void {
+    if (expected !== this.#nextRevision(global, stored)) {
+      throw new PreferenceStateError(
+        "stale-preferences",
+        "the setting for the next session changed or the server restarted; reopen the editor before applying this draft",
+      );
+    }
+  }
+
   #expectRevision(
     expected: string,
     global: GlobalPreferences | undefined,
@@ -228,6 +408,41 @@ export class PreferenceStore {
       : parseGlobalPreferences(stored, "stored");
   }
 
+  async #loadNext(): Promise<{
+    readonly stored: unknown;
+    readonly global: GlobalPreferences | undefined;
+    readonly state: NextSessionState;
+  }> {
+    const global = await this.#loadGlobal();
+    const stored = await this.#read(NEXT_KEY, "pending");
+    const fallback: PreferenceView = resolvePreferences(global, undefined);
+    if (stored === undefined) {
+      return { stored, global, state: { status: "none", view: fallback } };
+    }
+    try {
+      const pending = parsePendingNextSession(stored, "stored");
+      return {
+        stored,
+        global,
+        state: {
+          status: "pending",
+          savedAt: pending.savedAt,
+          view: resolvePreferences(
+            global,
+            parseSessionChange(INHERITING_SESSION_PREFERENCES, pending.change),
+          ),
+        },
+      };
+    } catch (error) {
+      if (!(error instanceof PreferenceStateError)) throw error;
+      return {
+        stored,
+        global,
+        state: { status: "unreadable", code: error.code, view: fallback },
+      };
+    }
+  }
+
   async #loadSession(key: string): Promise<SessionPreferences | undefined> {
     const stored = await this.#read(key, "session");
     return stored === undefined
@@ -235,7 +450,10 @@ export class PreferenceStore {
       : parseSessionPreferences(stored, "stored");
   }
 
-  async #read(key: string, scope: "global" | "session"): Promise<unknown> {
+  async #read(
+    key: string,
+    scope: "global" | "session" | "pending",
+  ): Promise<unknown> {
     try {
       return await this.#storage.get(key);
     } catch (error) {
@@ -251,7 +469,7 @@ export class PreferenceStore {
   // prove the host kept the previous document, so the error is marked as uncertain.
   async #write(
     key: string,
-    document: GlobalPreferences | SessionPreferences,
+    document: GlobalPreferences | SessionPreferences | PendingNextSession,
   ): Promise<void> {
     try {
       await this.#storage.set(key, document);
@@ -275,6 +493,25 @@ export class PreferenceStore {
       );
     }
   }
+}
+
+// The scalars of a session document, which are exactly what a pending setting holds. Undefined when
+// every one of them inherits.
+function pendingScalars(
+  session: SessionPreferences,
+): SessionPreferenceChange | undefined {
+  const change: SessionPreferenceChange = {
+    ...(session.intensity === "inherit"
+      ? {}
+      : { intensity: session.intensity }),
+    ...(session.advisorMode === "inherit"
+      ? {}
+      : { advisorMode: session.advisorMode }),
+    ...(session.preference === "inherit"
+      ? {}
+      : { preference: session.preference }),
+  };
+  return Object.keys(change).length === 0 ? undefined : change;
 }
 
 // Only text names a session. Numbers and null would otherwise be coerced into the key of a

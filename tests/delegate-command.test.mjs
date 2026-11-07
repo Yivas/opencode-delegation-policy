@@ -370,6 +370,29 @@ test("a malformed thinking range is refused and the previous policy stays", asyn
   });
 });
 
+test("the next command saves and clears the setting for the next session", async () => {
+  const { store, ports } = setup();
+
+  const saved = await runDelegate("next aggressive", ports);
+  assert.match(
+    saved,
+    /Next session, saved:\nIntensity: aggressive \(next session\)/,
+  );
+  assert.equal((await store.readNext()).status, "pending");
+
+  // The defaults are still the defaults; the pending setting is reported on its own.
+  const status = await runDelegate("status", ports);
+  assert.match(
+    status,
+    /No session is open; these are the defaults\.\nIntensity: off/,
+  );
+  assert.match(status, /Next session \(saved .*\): intensity aggressive/);
+
+  await runDelegate("next clear", ports);
+  assert.equal((await store.readNext()).status, "none");
+  assert.doesNotMatch(await runDelegate("status", ports), /Next session/);
+});
+
 test("the status without a session shows the defaults, and with one the session", async () => {
   const { ports } = setup();
   await runDelegate("aggressive", ports, { sessionID: "ses" });

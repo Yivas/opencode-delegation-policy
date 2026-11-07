@@ -1,6 +1,7 @@
 import {
   type DelegateCommandPorts,
   describePreferenceView,
+  NEXT_SESSION_SOURCES,
 } from "../command/delegate.js";
 import {
   BUILT_IN_GLOBAL_PREFERENCES,
@@ -22,6 +23,7 @@ import type {
   EditorReply,
   EditorSnapshot,
   EditorTarget,
+  PendingStatus,
 } from "./contract.js";
 
 export type EditorPorts = Omit<DelegateCommandPorts, "store"> & {
@@ -31,7 +33,8 @@ export type EditorPorts = Omit<DelegateCommandPorts, "store"> & {
 function target(value: unknown): EditorTarget {
   if (!isPlainRecord(value)) throw new Error("invalid editor request");
   const { scope, sessionID } = value;
-  if (scope === "defaults" && sessionID === undefined) return { scope };
+  if ((scope === "defaults" || scope === "next") && sessionID === undefined)
+    return { scope };
   if (scope === "session" && typeof sessionID === "string" && sessionID !== "")
     return { scope, sessionID };
   throw new Error("invalid editor target");
@@ -49,7 +52,8 @@ function requireDefaults(
 ): asserts change is GlobalPreferenceChange {
   parseGlobalChange(BUILT_IN_GLOBAL_PREFERENCES, change);
 }
-function requireSession(
+// A session and the next session hold the same thing: the scalars, with models only in the defaults.
+function requireScalars(
   change: unknown,
 ): asserts change is SessionPreferenceChange {
   parseSessionChange(INHERITING_SESSION_PREFERENCES, change);
@@ -61,10 +65,18 @@ function requireSession(
   ) {
     throw new PreferenceStateError(
       "invalid-change",
-      "session edits can change only intensity, Advisor mode and preference; configure models in the defaults",
+      "only intensity, Advisor mode and preference can change here; configure models in the defaults",
     );
   }
 }
+
+const PENDING_TEXT: Readonly<Record<PendingStatus, string>> = {
+  none: "No setting is waiting, so the next session uses the defaults.",
+  pending:
+    "The first root session created after this was saved takes these values as its own, and the setting is removed.",
+  unreadable:
+    "The saved setting cannot be read, so no session will claim it and the next session uses the defaults; saving again replaces it.",
+};
 
 function failure(error: unknown, mayHaveWritten: boolean): EditorFailure {
   if (error instanceof PreferenceStateError) {
@@ -102,7 +114,12 @@ export function createPreferenceEditor(ports: EditorPorts) {
       try {
         const scope = target(input);
         await confirmSession(scope);
-        const snapshot = await ports.store.readForEdit(scope.sessionID);
+        const pending =
+          scope.scope === "next"
+            ? await ports.store.readNextForEdit()
+            : undefined;
+        const snapshot =
+          pending ?? (await ports.store.readForEdit(scope.sessionID));
         // Catalogue failure does not prevent disabling settings. Model selection simply has no
         // candidates; the preview still reports the validator's unavailable-catalogue diagnostic.
         let models: EditorSnapshot["models"] = [];
@@ -123,10 +140,16 @@ export function createPreferenceEditor(ports: EditorPorts) {
             (await describePreferenceView(
               snapshot.view,
               ports,
-              scope.scope === "defaults"
-                ? "Defaults editor:"
-                : "This session's editor:",
-            )) + catalogueNote,
+              pending === undefined
+                ? scope.scope === "defaults"
+                  ? "Defaults editor:"
+                  : "This session's editor:"
+                : "Next session's editor:",
+              pending === undefined ? undefined : NEXT_SESSION_SOURCES,
+            )) +
+            (pending === undefined ? "" : `\n${PENDING_TEXT[pending.status]}`) +
+            catalogueNote,
+          ...(pending === undefined ? {} : { pending: pending.status }),
         };
       } catch (error) {
         return failure(error, false);
@@ -140,12 +163,15 @@ export function createPreferenceEditor(ports: EditorPorts) {
         const expected = revision(input.revision);
         const change = input.change;
         if (scope.scope === "defaults") requireDefaults(change);
-        else requireSession(change);
-        const view = await ports.store.previewForEdit(
-          expected,
-          change,
-          scope.sessionID,
-        );
+        else requireScalars(change);
+        const view =
+          scope.scope === "next"
+            ? await ports.store.previewNextForEdit(expected, change)
+            : await ports.store.previewForEdit(
+                expected,
+                change,
+                scope.sessionID,
+              );
         return {
           ok: true,
           ...scope,
@@ -172,8 +198,12 @@ export function createPreferenceEditor(ports: EditorPorts) {
           requireDefaults(change);
           mayHaveWritten = true;
           view = await ports.store.saveDefaults(change, expected);
+        } else if (scope.scope === "next") {
+          requireScalars(change);
+          mayHaveWritten = true;
+          view = await ports.store.saveNext(change, expected);
         } else {
-          requireSession(change);
+          requireScalars(change);
           if (scope.sessionID === undefined)
             throw new Error("missing editor session");
           mayHaveWritten = true;
@@ -191,7 +221,10 @@ export function createPreferenceEditor(ports: EditorPorts) {
             ports,
             scope.scope === "defaults"
               ? "Defaults saved."
-              : "This session, saved:",
+              : scope.scope === "next"
+                ? "Next session, saved:"
+                : "This session, saved:",
+            scope.scope === "next" ? NEXT_SESSION_SOURCES : undefined,
           ),
         };
       } catch (error) {

@@ -100,6 +100,16 @@ export type SessionPreferenceChange = {
   readonly advisors?: SessionAdvisorsSetting;
 };
 
+// What "Apply to next session" leaves behind: the scalars a session may override, and when they were
+// saved. Models, thinking and Advisors are shared by every session, so they are never part of it.
+// `savedAt` is epoch milliseconds on the same clock the host stamps `time.created` with, and it is
+// what decides which session may claim the setting.
+export type PendingNextSession = {
+  readonly schemaVersion: typeof CURRENT_SCHEMA_VERSION;
+  readonly savedAt: number;
+  readonly change: SessionPreferenceChange;
+};
+
 export type PreferenceStateErrorCode =
   | "corrupt-document"
   | "future-document"
@@ -132,7 +142,7 @@ export class PreferenceStateError extends Error {
 // be produced from a valid change.
 export type ParseOrigin = "stored" | "change";
 
-type Scope = "global" | "session";
+type Scope = "global" | "session" | "pending";
 
 type ParseContext = {
   readonly origin: ParseOrigin;
@@ -234,6 +244,102 @@ export function parseSessionPreferences(
     ),
     advisors: parseSessionAdvisorsSetting(record.advisors, context, "advisors"),
   };
+}
+
+const PENDING_KEYS = ["schemaVersion", "savedAt", "change"] as const;
+const PENDING_CHANGE_KEYS = ["intensity", "advisorMode", "preference"] as const;
+
+// The largest timestamp a Date can represent. A stored value beyond it would make the report of when
+// the setting was saved throw, so it is refused as corruption instead.
+const MAX_TIMESTAMP = 8_640_000_000_000_000;
+
+// A pending document is read with the stored-document rules: an unknown version or shape is refused
+// rather than interpreted, and the caller then leaves it unclaimed.
+export function parsePendingNextSession(
+  value: unknown,
+  origin: ParseOrigin,
+): PendingNextSession {
+  const context: ParseContext = { origin, scope: "pending" };
+  const record = requireRecord(value, context, "root");
+
+  const version = record.schemaVersion;
+  if (
+    origin === "stored" &&
+    typeof version === "number" &&
+    Number.isInteger(version) &&
+    version > CURRENT_SCHEMA_VERSION
+  ) {
+    throw new PreferenceStateError(
+      "future-document",
+      `pending next session document uses schema version ${version}; this build reads version ${CURRENT_SCHEMA_VERSION}`,
+    );
+  }
+
+  requireKeys(record, PENDING_KEYS, PENDING_KEYS, context, "root");
+  if (record.schemaVersion !== CURRENT_SCHEMA_VERSION) {
+    fail(context, "schemaVersion", "unsupported schema version");
+  }
+  const savedAt = record.savedAt;
+  if (
+    typeof savedAt !== "number" ||
+    !Number.isInteger(savedAt) ||
+    savedAt < 0 ||
+    savedAt > MAX_TIMESTAMP
+  ) {
+    fail(context, "savedAt", "expected a whole number of epoch milliseconds");
+  }
+
+  return {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    savedAt,
+    change: parsePendingChange(record.change, context),
+  };
+}
+
+// Only concrete scalars: an inherit marker would be a pending setting with nothing to apply, which is
+// how the document is removed instead. An empty change is refused for the same reason.
+function parsePendingChange(
+  value: unknown,
+  context: ParseContext,
+): SessionPreferenceChange {
+  const record = requireRecord(value, context, "change");
+  requireKeys(record, PENDING_CHANGE_KEYS, [], context, "change");
+  const change: SessionPreferenceChange = {
+    ...(record.intensity === undefined
+      ? {}
+      : {
+          intensity: parseEnum(
+            record.intensity,
+            INTENSITIES,
+            context,
+            "change.intensity",
+          ),
+        }),
+    ...(record.advisorMode === undefined
+      ? {}
+      : {
+          advisorMode: parseEnum(
+            record.advisorMode,
+            ADVISOR_MODES,
+            context,
+            "change.advisorMode",
+          ),
+        }),
+    ...(record.preference === undefined
+      ? {}
+      : {
+          preference: parseEnum(
+            record.preference,
+            PREFERENCES,
+            context,
+            "change.preference",
+          ),
+        }),
+  };
+  if (Object.keys(change).length === 0) {
+    fail(context, "change", "expected at least one setting");
+  }
+  return change;
 }
 
 const CHANGE_KEYS = [

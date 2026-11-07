@@ -1,5 +1,7 @@
 // Watches the host's public event stream for the end of each turn, which is what consumes a
-// configuration notice. Only reading is involved: the plugin starts nothing and sends nothing.
+// configuration notice, and for new sessions, which is the earliest moment a setting saved for the
+// next session can be given to one. Only reading is involved: the plugin starts nothing and sends
+// nothing.
 //
 // A stream that ends or fails is opened again after a pause that grows up to a ceiling, until the
 // plugin stops. While it is down, turns are not seen to end, so a pending notice keeps repeating
@@ -17,6 +19,9 @@ export type TurnWatchPorts = {
     readonly signal: AbortSignal;
   }) => AsyncIterable<TurnEvent>;
   readonly ended: (sessionID: string, succeeded: boolean) => void;
+  // A session the host has just created, with its parent when it has one. It must not throw and is
+  // not awaited: the stream must keep reading while the caller decides what to do.
+  readonly created?: (sessionID: string, parentID: string | undefined) => void;
   // Sees every event, for the local log. It must not throw.
   readonly observe?: (event: TurnEvent) => void;
   readonly signal: AbortSignal;
@@ -38,6 +43,12 @@ function sessionOf(data: unknown): string | undefined {
   if (typeof data !== "object" || data === null) return undefined;
   const sessionID = (data as { sessionID?: unknown }).sessionID;
   return typeof sessionID === "string" ? sessionID : undefined;
+}
+
+function parentOf(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) return undefined;
+  const parentID = (data as { parentID?: unknown }).parentID;
+  return typeof parentID === "string" ? parentID : undefined;
 }
 
 export function watchTurns(ports: TurnWatchPorts): {
@@ -67,6 +78,13 @@ export function watchTurns(ports: TurnWatchPorts): {
         for await (const event of ports.subscribe({ signal: ports.signal })) {
           pause = FIRST_PAUSE;
           ports.observe?.(event);
+          if (event.type === "session.created") {
+            const sessionID = sessionOf(event.data);
+            if (sessionID !== undefined) {
+              ports.created?.(sessionID, parentOf(event.data));
+            }
+            continue;
+          }
           const succeeded = ENDINGS[event.type];
           if (succeeded === undefined) continue;
           const sessionID = sessionOf(event.data);

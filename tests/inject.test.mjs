@@ -80,6 +80,8 @@ function sessions(parents = {}, agents = REGISTERED) {
       if (parents[sessionID] === "fail") throw new Error("host detail");
       return { parentID: parents[sessionID] };
     },
+    // Older than any setting a test saves, so nothing is claimed unless a test says otherwise.
+    createdAt: async () => 0,
   };
 }
 
@@ -98,6 +100,29 @@ test("the main agent's request gets exactly one policy block after what was alre
   assert.deepEqual(system[0], OTHER);
   assert.match(system[1].text, /<delegation_policy>/);
   assert.deepEqual(injector.last(), { outcome: "injected" });
+});
+
+test("the first request of a new root session takes the setting saved for it, a child never does", async () => {
+  const { store } = await activeStore();
+  await store.saveNext({ intensity: "aggressive" });
+  const { savedAt } = await store.readNext();
+  const injector = createPolicyInjector({
+    store,
+    catalog,
+    ...sessions({ child: "root" }),
+    createdAt: async () => savedAt + 1,
+  });
+
+  const child = [];
+  await injector.apply({ sessionID: "child", agent: "build", system: child });
+  assert.deepEqual(child, []);
+  assert.equal((await store.readNext()).status, "pending");
+
+  // The policy of the first turn already follows the claimed values.
+  const root = [];
+  await injector.apply({ sessionID: "root", agent: "build", system: root });
+  assert.match(root.at(-1).text, /Intensity: aggressive\./);
+  assert.equal((await store.readNext()).status, "none");
 });
 
 test("a delegated child and the plugin's own agents never get the policy", async () => {

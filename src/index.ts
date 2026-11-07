@@ -38,10 +38,15 @@ const delegationPolicy: Plugin.Plugin = {
       storage: context.storage,
       hostVersion: context.app.version,
     });
+    // The session's creation time, in the host's epoch milliseconds. Read only when a setting is
+    // waiting for the next session.
+    const createdAt = (sessionID: string) =>
+      context.session.get({ sessionID }).then((info) => info.time.created);
     const injector = createPolicyInjector({
       store: wiring.store,
       catalog: context.model,
       session: (sessionID) => context.session.get({ sessionID }),
+      createdAt,
       agents: () => wiring.agents(),
       injected: (block, preferences) => log.policy(block, preferences),
     });
@@ -169,6 +174,13 @@ const delegationPolicy: Plugin.Plugin = {
         subscribe: (options) => context.event.subscribe(options),
         ended: (sessionID, succeeded) =>
           injector.turnEnded(sessionID, succeeded),
+        // A root session claims the setting saved for the next one as soon as it exists, which is
+        // earlier than its first request. A child never claims: its values come from its parent's
+        // launch, and the policy never reaches it.
+        created: (sessionID, parentID) => {
+          if (parentID !== undefined && parentID !== "") return;
+          void injector.claim(sessionID);
+        },
         observe: (event) => log.observe(event),
         signal: events.signal,
       });

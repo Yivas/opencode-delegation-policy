@@ -1015,3 +1015,154 @@ test("a removal that fails before persisting leaves the override in place", asyn
     "normal",
   );
 });
+
+test("a setting saved for the next session is what the next session would use", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+
+  await store.saveDefaults({ intensity: "normal" });
+  const saved = await store.saveNext({
+    intensity: "aggressive",
+    preference: "efficient",
+  });
+  assert.equal(saved.preferences.intensity, "aggressive");
+  assert.equal(saved.provenance.intensity, "session");
+
+  const next = await store.readNext();
+  assert.equal(next.status, "pending");
+  assert.equal(next.view.preferences.intensity, "aggressive");
+  assert.equal(next.view.preferences.preference, "efficient");
+  assert.equal(next.view.preferences.advisorMode, "with-delegation");
+  assert.equal(next.view.provenance.intensity, "session");
+  assert.equal(next.view.provenance.advisorMode, "global");
+  assert.ok(next.savedAt > 0);
+
+  // Saving again replaces the whole setting: a scalar left out is not kept.
+  await store.saveNext({ advisorMode: "off" });
+  const replaced = await store.readNext();
+  assert.equal(replaced.view.preferences.intensity, "normal");
+  assert.equal(replaced.view.preferences.advisorMode, "off");
+  assert.equal(replaced.view.provenance.intensity, "global");
+
+  // An empty change drops it, which is what choosing "follow defaults" in every row means.
+  await store.saveNext({});
+  assert.equal((await store.readNext()).status, "none");
+  assert.equal(double.removals.length, 1);
+});
+
+test("the first session created after the save claims the setting, and only once", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveNext({ intensity: "aggressive" });
+  const { savedAt } = await store.readNext();
+
+  const claimed = await store.claimNextSession("first", async () => savedAt);
+  assert.equal(claimed.claimed, true);
+  const view = await store.readSession("first");
+  assert.equal(view.preferences.intensity, "aggressive");
+  assert.equal(view.provenance.intensity, "session");
+  assert.equal((await store.readNext()).status, "none");
+
+  // A second new session finds nothing: the setting belonged to the first one.
+  assert.deepEqual(
+    await store.claimNextSession("second", async () => savedAt + 1),
+    { claimed: false, reason: "no-pending" },
+  );
+  assert.equal(
+    (await store.readSession("second")).preferences.intensity,
+    "off",
+  );
+});
+
+test("an older session, an edited session and an unknown creation time do not claim it", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveNext({ intensity: "aggressive" });
+  const { savedAt } = await store.readNext();
+
+  assert.deepEqual(
+    await store.claimNextSession("old", async () => savedAt - 1),
+    { claimed: false, reason: "session-created-before-save" },
+  );
+  assert.equal((await store.readNext()).status, "pending");
+
+  await store.applySession("edited", { preference: "efficient" });
+  assert.deepEqual(
+    await store.claimNextSession("edited", async () => savedAt + 1),
+    { claimed: false, reason: "session-has-settings" },
+  );
+  assert.equal(
+    (await store.readSession("edited")).preferences.intensity,
+    "off",
+  );
+  assert.equal((await store.readNext()).status, "pending");
+
+  assert.deepEqual(
+    await store.claimNextSession("unknown", async () => {
+      throw new Error("host detail");
+    }),
+    { claimed: false, reason: "unknown-creation-time" },
+  );
+  assert.equal((await store.readNext()).status, "pending");
+});
+
+test("a pending setting this build cannot read is reported and never claimed", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  await store.saveNext({ intensity: "aggressive" });
+  const key = double.writes.at(-1);
+  const future = JSON.stringify({
+    schemaVersion: 2,
+    savedAt: 1,
+    change: { intensity: "aggressive" },
+  });
+  double.records.set(key, future);
+
+  const state = await store.readNext();
+  assert.equal(state.status, "unreadable");
+  assert.equal(state.code, "future-document");
+  assert.equal(state.view.preferences.intensity, "off");
+
+  assert.deepEqual(await store.claimNextSession("new", async () => 1e15), {
+    claimed: false,
+    reason: "unreadable-pending",
+  });
+  assert.equal(double.records.get(key), future);
+  assert.equal(
+    (await store.readSession("new")).provenance.intensity,
+    "default",
+  );
+});
+
+test("a pending draft is refused once the setting or the defaults changed", async () => {
+  const double = createStorageDouble();
+  const store = new PreferenceStore(double.storage);
+  const empty = await store.readNextForEdit();
+  assert.equal(empty.status, "none");
+
+  await store.saveNext({ intensity: "aggressive" }, empty.revision);
+  await assert.rejects(
+    store.saveNext({ intensity: "normal" }, empty.revision),
+    assertStoreError("stale-preferences"),
+  );
+
+  const current = await store.readNextForEdit();
+  assert.equal(current.status, "pending");
+  const preview = await store.previewNextForEdit(current.revision, {
+    preference: "efficient",
+  });
+  // A preview shows the draft alone and writes nothing, as the session scope does.
+  assert.equal(preview.preferences.preference, "efficient");
+  assert.equal(preview.provenance.preference, "session");
+  assert.equal(
+    (await store.readNext()).view.preferences.intensity,
+    "aggressive",
+  );
+
+  // The pending scope resolves against the defaults, so a defaults change invalidates it too.
+  await store.saveDefaults({ advisorMode: "off" });
+  await assert.rejects(
+    store.previewNextForEdit(current.revision, { preference: "efficient" }),
+    assertStoreError("stale-preferences"),
+  );
+});

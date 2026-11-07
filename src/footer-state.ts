@@ -14,7 +14,7 @@ import {
 // per axis. It describes what the main agent of that session would receive, not a saved value.
 
 export type FooterStatePorts = {
-  readonly store: Pick<PreferenceStore, "readGlobal" | "readSession">;
+  readonly store: Pick<PreferenceStore, "readNext" | "readSession">;
   readonly catalog: ModelCatalog;
   readonly agents: () => Promise<readonly AgentDefinition[]>;
   // The session's parent, if it has one. A child session never receives the policy.
@@ -47,9 +47,11 @@ export async function footerState(
 
   let view: PreferenceView;
   try {
+    // At home the label describes the session that would open next, so a setting saved for it is
+    // shown as what it is: the values that session will start with.
     view =
       sessionID === undefined
-        ? await ports.store.readGlobal()
+        ? (await ports.store.readNext()).view
         : await ports.store.readSession(sessionID);
   } catch (error) {
     // An unreadable or future document fails both axes, as it does for the policy.

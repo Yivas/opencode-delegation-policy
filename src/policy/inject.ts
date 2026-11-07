@@ -115,12 +115,15 @@ export type InjectionReport =
     };
 
 export type InjectorPorts = {
-  readonly store: Pick<PreferenceStore, "readSession">;
+  readonly store: Pick<PreferenceStore, "readSession" | "claimNextSession">;
   readonly catalog: ModelCatalog;
   // Only `parentID` is read. A child is a session launched from another; it never changes parents.
   readonly session: (
     sessionID: string,
   ) => Promise<{ readonly parentID?: string | undefined }>;
+  // The session's creation time in epoch milliseconds, asked only when a setting is waiting for the
+  // next session. It is the host's own clock, the same one the plugin saves with.
+  readonly createdAt: (sessionID: string) => Promise<number>;
   // The plugin's agents as the host has them. The block names only these, whatever the session
   // turned on.
   readonly agents: () => Promise<readonly AgentDefinition[]>;
@@ -137,6 +140,11 @@ export type PolicyInjector = {
     readonly agent: string;
     system: SystemPart[];
   }): Promise<void>;
+  // Gives a session the setting that was saved for the next one. The host's creation event calls it
+  // before the first request, and the first request calls it again, so a missed event changes only
+  // when the setting is applied, not whether. It never rejects: a session that cannot claim simply
+  // keeps what it has, and the setting stays visible in the status and the panel.
+  claim(sessionID: string): Promise<void>;
   last(): InjectionReport;
   // The session's turn ended. A successful turn consumed the notice it carried; another ending
   // leaves it for the next turn.
@@ -167,6 +175,17 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
     return root;
   }
 
+  const claim = async (sessionID: string): Promise<void> => {
+    try {
+      await ports.store.claimNextSession(sessionID, () =>
+        ports.createdAt(sessionID),
+      );
+    } catch {
+      // The pending setting is not lost: it is still what the status and the panel report, and the
+      // next session can claim it. Failing the request over it would be worse.
+    }
+  };
+
   return {
     async apply(request) {
       // The previous block goes first, so a request that fails below never keeps a stale one.
@@ -188,6 +207,11 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
         report = { outcome: "skipped", reason: "child-session" };
         return;
       }
+
+      // Before the policy is rendered, so the first turn of a new session already follows the values
+      // saved for it. Only a root session gets here, and the store decides the rest from the saved
+      // time and this session's creation time.
+      await claim(request.sessionID);
 
       // A hook that throws could break the person's request, so every failure ends here with no
       // block, as Pi injects nothing on error. The status says which failure it was.
@@ -236,6 +260,7 @@ export function createPolicyInjector(ports: InjectorPorts): PolicyInjector {
           ? { outcome: "skipped", reason: "nothing-active" }
           : { outcome: "injected" };
     },
+    claim,
     last: () => report,
     turnEnded: (sessionID, succeeded) => notices.ended(sessionID, succeeded),
   };

@@ -5,7 +5,12 @@ import {
   parseGlobalPreferences,
   type SessionPreferenceChange,
 } from "../state/schema.js";
-import type { EditorReply, EditorSnapshot, EditorTarget } from "./contract.js";
+import type {
+  EditorReply,
+  EditorSnapshot,
+  EditorTarget,
+  PendingStatus,
+} from "./contract.js";
 
 // The host's promise dialogs, as this plugin uses them. They live here, beside `EditorDialogs` which
 // extends them, so the panel, this client and the terminal entry share them without an import cycle.
@@ -86,6 +91,16 @@ function view(value: unknown): PreferenceView {
 function matches(raw: Record<string, unknown>, target: EditorTarget): boolean {
   return raw.scope === target.scope && raw.sessionID === target.sessionID;
 }
+
+// Only the "next" scope sends it, so an absent value is normal and an unknown one is a contract
+// violation like any other.
+function pendingStatus(value: unknown): PendingStatus | undefined {
+  if (value === undefined) return undefined;
+  if (value === "none" || value === "pending" || value === "unreadable") {
+    return value;
+  }
+  throw new Error("invalid editor pending status");
+}
 function reference(value: unknown): string {
   if (
     typeof value !== "string" ||
@@ -139,6 +154,7 @@ function parseSnapshot(value: unknown, target: EditorTarget): EditorSnapshot {
     });
     return { reference: base, variants };
   });
+  const pending = pendingStatus(raw.pending);
   return {
     ok: true,
     ...target,
@@ -146,6 +162,7 @@ function parseSnapshot(value: unknown, target: EditorTarget): EditorSnapshot {
     view: view(raw.view),
     models,
     text: raw.text,
+    ...(pending === undefined ? {} : { pending }),
   };
 }
 export function parseReply(value: unknown, target: EditorTarget): EditorReply {

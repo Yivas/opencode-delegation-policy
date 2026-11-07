@@ -493,8 +493,12 @@ test("without an open session the panel works on the defaults", async () => {
   });
   f.assertConsumed();
 
+  // The start panel reads the defaults and, in the same pass, what the next session would use.
   assert.deepEqual(
     f.calls.map(([method, input]) => [method, input.scope]),
-    [["read", "defaults"]],
+    [
+      ["read", "defaults"],
+      ["read", "next"],
+    ],
   );
 });
