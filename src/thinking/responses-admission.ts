@@ -729,16 +729,16 @@ const CANONICAL_LEVELS: readonly ThinkingLevel[] = [
   "max",
 ];
 const RESPONSES_EVIDENCE =
-  "opencode@9bbb8ce1 packages/ai/src/protocols/utils/open-responses-options.ts";
+  "opencode@dc2ffcf8 packages/ai/src/protocols/utils/open-responses-options.ts";
 const PI_OPENAI = "pi-ai@0.87.1 providers/data/openai.json";
 const PI_XAI = "pi-ai@0.87.1 providers/data/xai.json";
 const PI_META = "pi-ai@0.87.1 providers/data/meta.json";
 const PI_OPENCODE = "pi-ai@0.87.1 providers/data/opencode.json";
 const PI_OPENCODE_GO = "pi-ai@0.87.1 providers/data/opencode-go.json";
 const META_RESPONSES_EVIDENCE =
-  "OpenCode 9bbb8ce1 packages/ai/src/providers/meta/responses.ts + protocols/meta-responses.ts + providers/meta.ts";
+  "OpenCode dc2ffcf8 packages/ai/src/providers/meta/responses.ts + protocols/meta-responses.ts + providers/meta.ts";
 const COPILOT_RESPONSES_EVIDENCE =
-  "OpenCode 9bbb8ce1 packages/core/src/github-copilot/responses/openai-responses-language-model.ts + packages/core/src/aisdk.ts + packages/core/src/plugin/provider/github-copilot.ts + packages/core/src/model.ts";
+  "OpenCode dc2ffcf8 packages/core/src/github-copilot/responses/openai-responses-language-model.ts + packages/core/src/aisdk.ts + packages/core/src/plugin/provider/github-copilot.ts + packages/core/src/model.ts";
 const SAFE_NON_REASONING_INCLUDES = new Set(["code_interpreter_call.outputs"]);
 // The Copilot lowerer's runtime schema is narrower than its API include type.
 const COPILOT_INCLUDE_VALUES = new Set([

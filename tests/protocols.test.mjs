@@ -1216,7 +1216,36 @@ test("an OpenCode-only wrapper proof is native and never cites Pi", () => {
   assert.equal(proof.sourceScope, "native-fields");
   assert.equal(proof.transportKind, "native");
   assert.deepEqual(proof.compatibleLevels, ["low"]);
-  assert.match(proof.evidence, /^opencode@9bbb8ce1 /);
+  assert.match(proof.evidence, /^opencode@dc2ffcf8 /);
+});
+
+// 2.2.6 documents `reasoning.exclude` next to effort, enabled and max_tokens. The reader forwards it,
+// but it names no level, so a variant that carries it is unmapped instead of silently accepted.
+test("an OpenRouter reasoning.exclude overlay is not read as a level", () => {
+  assert.equal(
+    knownThinkingProof(
+      model(PACKAGE.openrouter, "x/y"),
+      variant({ settings: { reasoning: { effort: "high", exclude: true } } }),
+    ),
+    undefined,
+  );
+});
+
+// 2.2.6 also carries effort in `output_config`. The Anthropic family reads only `effort`, so a variant
+// that spells the level there is unmapped rather than admitted under the wrong control.
+test("an Anthropic output_config effort overlay is not read as a level", () => {
+  assert.equal(
+    knownThinkingProof(
+      model(PACKAGE.anthropic, "claude-opus-4-8"),
+      variant({
+        settings: {
+          thinking: { type: "adaptive" },
+          output_config: { effort: "high" },
+        },
+      }),
+    ),
+    undefined,
+  );
 });
 
 test("Anthropic catalogue recipe levels remain projections, not request-level proofs", () => {
@@ -1342,7 +1371,7 @@ test("an openai or xai responses proof cites the OpenCode schema and never Pi", 
     assert.deepEqual(proof.compatibleLevels, ["xhigh"]);
     assert.equal(
       proof.evidence,
-      "opencode@9bbb8ce1 packages/ai/src/protocols/utils/open-responses-options.ts",
+      "opencode@dc2ffcf8 packages/ai/src/protocols/utils/open-responses-options.ts",
     );
   }
 });

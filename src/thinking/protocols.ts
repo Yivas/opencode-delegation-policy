@@ -16,8 +16,9 @@ import type { ThinkingLevel } from "./policies.js";
 // - "pi-ai@<version> <file> <model>": Pi's generated catalogue for that model (npm archive, read-only).
 //   The model's thinkingLevelMap, reasoning flag, and compat decide the set. Pi archives used:
 //   0.87.1 (git f07218c4d4bbc12bef056a7058c3dd49dfe41abe) and 1.1.0 (npm, sha512 verified).
-// - "opencode@9bbb8ce1 <file>": OpenCode 2.2.5's own reader for that overlay. It proves the field is valid and
-//   that the wire names the level. It does not prove Pi's translation, so it is never Pi parity.
+// - "opencode@dc2ffcf8 <file>": OpenCode 2.2.6's own reader for that overlay (dc2ffcf8 is tag v2.2.6). It
+//   proves the field is valid and that the wire names the level. It does not prove Pi's translation, so it
+//   is never Pi parity.
 //
 // A family returns undefined when its overlay or model is outside the proof. Undefined means
 // unmapped, never unsupported.
@@ -62,16 +63,17 @@ type Family = (
 const GENERIC_EFFORTS: readonly ThinkingLevel[] = ["low", "medium", "high"];
 
 const OPENCODE_RESPONSES =
-  "opencode@9bbb8ce1 packages/ai/src/protocols/utils/open-responses-options.ts";
+  "opencode@dc2ffcf8 packages/ai/src/protocols/utils/open-responses-options.ts";
 const OPENCODE_CHAT =
-  "opencode@9bbb8ce1 packages/ai/src/protocols/openai-chat.ts";
+  "opencode@dc2ffcf8 packages/ai/src/protocols/openai-chat.ts";
 const OPENCODE_ALIBABA_CHAT =
-  "opencode@9bbb8ce1 packages/ai/src/protocols/alibaba-chat.ts";
+  "opencode@dc2ffcf8 packages/ai/src/protocols/alibaba-chat.ts";
+// The enabled effort reaches the body through anthropic-messages output_config.effort, so both readers are cited.
 const OPENCODE_ZAI_MESSAGES =
-  "opencode@9bbb8ce1 packages/ai/src/protocols/zai-messages.ts";
-const OPENCODE_GEMINI = "opencode@9bbb8ce1 packages/ai/src/protocols/gemini.ts";
+  "opencode@dc2ffcf8 packages/ai/src/protocols/zai-messages.ts + anthropic-messages.ts";
+const OPENCODE_GEMINI = "opencode@dc2ffcf8 packages/ai/src/protocols/gemini.ts";
 const OPENCODE_OPENROUTER =
-  "opencode@9bbb8ce1 packages/ai/src/providers/openrouter.ts";
+  "opencode@dc2ffcf8 packages/ai/src/providers/openrouter.ts";
 
 const PI_ANTHROPIC_0_87_1 = "pi-ai@0.87.1 providers/data/anthropic.json";
 const PI_ANTHROPIC_1_1_0 = "pi-ai@1.1.0 providers/data/anthropic.json";
@@ -364,9 +366,10 @@ function bodyOf(variant: ProtocolVariant): unknown {
   return ownField(variant, "body");
 }
 
-// The known reasoningEffort literals of the OpenAI responses schema (packages/ai/src/schema/options.ts,
-// blob 4e69d6c7, at 9bbb8ce1): none, minimal, low, medium, high, xhigh, max. "none" and a literal
-// "off" are not proofs of off here; the schema accepts any string, so only these names are read.
+// The known reasoningEffort literals of the OpenAI responses schema (opencode@dc2ffcf8
+// packages/ai/src/schema/options.ts, blob f9d6bff1): none, minimal, low, medium, high, xhigh, max.
+// "none" and a literal "off" are not proofs of off here; the schema accepts any string, so only these
+// names are read.
 const RESPONSES_EFFORTS: readonly ThinkingLevel[] = [
   "minimal",
   "low",
@@ -742,8 +745,9 @@ const deepseekFamily: Family = (variant, model) => {
   return undefined;
 };
 
-// OpenRouter reasoning.effort is forwarded as the effort; enabled, budgets, and other controls are not
-// read as a level.
+// OpenRouter forwards the whole `reasoning` object unchanged (openrouter.ts only fits max_tokens), so
+// reasoning.effort reaches the upstream as the effort. enabled, exclude, budgets and any other control
+// name no level here: the exact-field check below rejects them instead of ignoring them.
 const openrouterFamily: Family = (variant) => {
   const settings = exactFields(settingsOf(variant), ["reasoning"]);
   const reasoning = exactFields(ownField(settings, "reasoning"), [
