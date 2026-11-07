@@ -264,6 +264,10 @@ const plugin: Plugin.Definition = {
 
 function registerDelegateCommand(context: Plugin.Context): void {
   context.keymap.layer(() => ({
+    // The slash list only offers commands reachable in the current input mode, and typing `/` opens
+    // it in the `autocomplete` mode. A layer left in the default `base` mode drops out of its own
+    // suggestions, so this follows the host's `/cd` and stays reachable in every mode. It binds no key.
+    mode: "global",
     commands: [
       {
         id: "opencode-delegation-policy.delegate",

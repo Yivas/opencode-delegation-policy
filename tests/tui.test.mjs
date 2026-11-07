@@ -125,7 +125,7 @@ test("a request that never ran and one that may have run are told apart", () => 
   );
 });
 
-test("the entry registers /delegate with the raw line and forwards it", async () => {
+test("the entry registers /delegate in every input mode, without a key, and forwards the raw line", async () => {
   const layers = [];
   const alerts = [];
   const calls = [];
@@ -152,8 +152,12 @@ test("the entry registers /delegate with the raw line and forwards it", async ()
   assert.equal(tuiPlugin.id, "opencode-delegation-policy");
   tuiPlugin.setup(context);
 
-  const [command] = layers[0]().commands;
+  const layer = layers[0]();
+  // Typing `/` switches the host to its autocomplete mode; only a global layer stays in the list.
+  assert.equal(layer.mode, "global");
+  const [command] = layer.commands;
   assert.deepEqual(command.slash, { name: "delegate", arguments: true });
+  assert.equal(command.bind, undefined);
   await command.run("aggressive");
 
   assert.deepEqual(calls[0].input, {
