@@ -86,7 +86,10 @@ export function planOwnedBudgetVariants(
 }
 
 // The editor and registration shapes used by provisioning: the public ModelDomain transform surface
-// (plugin model.ts, blob 55248eaf; registration.ts, blob 3c2f8048).
+// (plugin model.ts at dc2ffcf8, blob f566277c; registration.ts, blob 3c2f8048). `list` still returns
+// the mutable catalogue entries including disabled ones, `update` still hands the callback a mutable
+// model whose `variants` array is the one the host keeps, and `transform` is still the same
+// callback-and-registration pair.
 export type OwnedVariantEditor = {
   list(providerID?: string): readonly OwnedVariantModel[];
   update(
@@ -102,9 +105,9 @@ export type OwnedVariantTransform = (
   callback: (editor: OwnedVariantEditor) => void,
 ) => Promise<OwnedVariantHandle>;
 
-// The read barrier. The host's `ctx.model.list()` (adapter.ts, blob 27b674b4) lands in
-// `models.available()` (core/plugin/host.ts, blob 37fe4d80), which reads the registry and rebuilds
-// any transform that changed inside a batch first (core/model.ts, blob 53563d1c). Only the ordering
+// The read barrier. The host's `ctx.model.list()` (adapter.ts at dc2ffcf8, blob 62387459) lands in
+// `models.available()` (core/plugin/host.ts, blob e521b8f9), which reads the registry and rebuilds
+// any transform that changed inside a batch first (core/model.ts, blob 0640ba8a). Only the ordering
 // matters here: the result is discarded and never stored.
 export type OwnedVariantRead = () => Promise<unknown>;
 
